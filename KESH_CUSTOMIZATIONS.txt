@@ -1,0 +1,190 @@
+================================================================================
+rgmercs-kesh カスタム内容メモ（現行）
+================================================================================
+ベース: 公式 RGMercs (DerpleDude/rgmercs) v2938
+起動  : /lua run rgmercs-kesh
+設定DB: config/rgmercs/（本家と共用）
+再構築: 2026-08-26（旧 kesh バックアップ: lua/rgmercs-kesh-backup-20260826-1902）
+追従  : 2026-08-27 casting GetTriggerSpells AutoCast(ID)（本家 #1395 / v2938）
+
+目的: lua/rgmercs が公式更新で上書きされても、改造版を残す。
+
+--------------------------------------------------------------------------------
+0. 今回の方針（取捨確定）
+--------------------------------------------------------------------------------
+再適用した:
+  - ScriptName / ScriptDir（フォルダ名自動検出）
+  - BeforeResolveActions（BRD Psalm / SHD LifeTap 等）
+  - Stick 自動距離 MaxRangeTo x 0.7（Nav と共通）
+  - Charm クリック Abilities「Charm」フェーズ結合
+  - HealPriorityPoint + GetHealScanThreshold（MaxHealPoint 廃止）
+  - EQ Might クラス差分（enc/brd/wiz/rng/nec/clr/shd）
+  - Named / Immune: 本家 Spawns モジュール + UseImmuneData（旧 named.lua 相当）
+
+本家のまま／見送り:
+  - Manual Mode（本家版）
+  - allowOnMezzed
+  - Peer 空テーブル Actors 修正
+  - ゾーン後45秒バフ抑制（LastZoneTime）
+  - Laz BRD Melody FAF / MelodyCastDue
+  - MezOn / CharmOn の Loadout 特例
+  - Live-kesh / Laz クラス差分の再移植
+
+--------------------------------------------------------------------------------
+1. コア
+--------------------------------------------------------------------------------
+パッケージ名:
+  - Globals.ScriptName / ScriptDir を実フォルダ名から自動検出
+  - Actors / lootnscoot directed / heartbeat も Globals.ScriptName 経由
+
+Heal:
+  - MaxHealPoint（Healing Threshold）廃止
+  - ヒール対象スキャンは Class:GetHealScanThreshold
+        （HealPct* があればその最大。無ければ Light/Main/Big/Group/Pet）
+  - HealPriorityPoint で攻撃ローテ降伏（0＝無効）
+  - TankPriorityThreshold でグループ対象選定のタンク優先（0＝優先なし。MainHealPoint から分離）
+  - Class HealPct* があるとき Light/Main/Group Heal Point は ShowCond で非表示
+
+Off-Tank Auto NoHate（Combat → Targeting → Tank Target Selection）:
+  - 設定名: OffTankAutoNoHate（既定 OFF）
+  - 目的: 副タンクが Group Main Tank の AutoTarget（例: Named）を NoHate に同期し、
+        副タンクの HateTools がその mob を叩かないようにする
+  - 前提:
+        ・自分は Tank モード（Core.IsTanking）
+        ・EQ グループの Main Tank が「自分以外」に設定されていること
+        ・Main Tank 側も rgmercs-kesh 稼働（heartbeat の AutoTargetID を参照）
+  - 参照先: Group.MainTank のみ。Main Assist へのフォールバックはしない
+  - 同期: Globals.AutoSyncedNoHateIDs で自動分を追跡。手動 NoHate は触らない
+  - 更新レイテンシ:
+        ・平常 heartbeat は directed heartbeat（約 500ms）
+        ・AutoTarget 変更時は Main から SendHeartbeat(force) で即送信
+          （Comms.ForceHeartbeatIfAutoTargetChanged）
+  - 自動解除（このときだけ auto NH を外し、副タンクが HateTools 可能になる）:
+        ・MT peer 死亡／Corpse
+        ・ゾーン／インスタンス違い
+        ・heartbeat が約 2 秒超で古い
+        ・MT の AutoTarget が変わった／無くなった
+        ・設定 OFF、または自分が Tank モードでない
+  - やらないこと:
+        ・戦闘中の aggro 喪失だけでは NoHate を外さない（peel は MT 側の仕事）
+        ・手動 NoHate の一括クリアはしない（Clear NoHate / /rgl クリア時は auto 分も一緒に消える）
+
+  想定運用（2タンク: MT＝Named、副＝雑魚クリア）:
+    Main Tank（Group Main Tank）:
+      - Mode = Tank
+      - Assist: 自分を MA にする（Assist List 先頭＝自分、または Group MA＝自分）
+      - Scan Priority = Named（Named を優先して掴む）
+      - Off-Tank Auto NoHate = OFF（不要）
+    Off-Tank（グループの Main Assist 想定）:
+      - Mode = Tank
+      - Scan Priority = Non-Named（雑魚を優先して刈る）
+      - Off-Tank Auto NoHate = ON
+      - グループロール: Main Tank＝上記 MT、Main Assist＝この副タンク
+    DPS / 他メンバー:
+      - Main Assist（副タンク）をアシスト → 雑魚クリアに追従
+    動きのイメージ:
+      MT が Named を AutoTarget → 副タンク側でその ID が NoHate 同期
+      → 副は Named に HateTools せず Non-Named を処理
+      → MT が死ぬ／ゾーン／heartbeat 切れ → auto NoHate 解除 → 副が Named を取れる
+
+Rotation / Charm:
+  - BeforeResolveActions: スペル解決直前に ClassConfig フック
+  - Clickies「As a Charm Action」に Charm / Pre-Charm / Charm Assist
+  - Charm Abilities リストに Charm フェーズ clicky を結合
+
+Stick:
+  - 空欄時: MaxRangeTo x 0.7（Melee Nav も同じ値。Height 14/34 はやめた）
+  - 明示値あり: Nav / Stick ともその値
+  - RNG Ranged Stick: Bow Range > 0 ならそれ、なければ Stick Distance / 自動
+  - TooFar / CantSee（Melee）も GetEngageDistance に統一（大型の距離7特例を削除）
+
+Tank Positioning:
+  - Tank Reposition Mode: Nav Mesh / Stick Snaproll（Keep Mobs in Front の方式）
+        Snaproll: /stick snaproll id <AutoTarget> loose uw（Auto Stick 必須、Auto Nav 不要）
+
+--------------------------------------------------------------------------------
+2. EQ Might クラス（バックアップから再適用）
+--------------------------------------------------------------------------------
+ENC:
+  - DebuffNamedOnly / DispelNamedOnly
+  - HateReductionBuffTarget / DoCasterIllusionBuff
+  - CombatBuffs（短時間バフの戦闘維持）
+
+BRD:
+  - ResistPsalmChoice（BeforeResolveActions）
+  - Puretone Discipline（Burn）
+  - MagicDotSong / UseErvajSong / UseCalmSong / UseSustenance 等
+
+WIZ:
+  - DoSpellAbsorbBuff / DoSpellShieldBuff
+
+RNG:
+  - JoltNamedOnly
+  - GetRangedStickDistance 利用
+
+NEC:
+  - DoDotSpread / DoT 優先・閾値等（バックアップ版）
+
+CLR / PAL / DRU / SHM 旧ポイント↔Class Heal の厳密対応:
+  → docs/EQMIGHT_HEAL_THRESHOLD_MAP.md
+
+CLR:
+  - クラス別 HealPct*（Complete / Fast / Regular / Group / HoT）
+  - Fast = 旧 Big Heal Point 帯（Divine Arb / Burst of Life / Remedy 等）
+  - Regular = Healing Light / Renewal
+
+SHM:
+  - クラス別 HealPct*（Fast / Regular / Single HoT / Group HoT）
+  - ヒールローテ1本・sortByHealThreshold
+  - 初期値はすべて 0（0＝そのクラスには使わない）
+
+PAL:
+  - クラス別 HealPct*（Fast / Regular / Group Regular / Single HoT）
+  - Fast = Lay on Hands / BurstHeal 等の緊急。ToT は Regular
+  - 初期値はすべて 0
+  - Downtime: Breath of Tunare（DoBreathOfTunare）
+  - HateTools(AggroTarget/AutoTarget)/AEHateTools: ローテ単位 IgnoreImmuneCheck（Hate目的なので Magic Immune でも打つ）
+  - rotation.lua / class.lua: ローテ定義の IgnoreImmuneCheck を Run 経由で一括適用（エントリ単位フラグも従来どおり有効）
+  - Stun ジェム解決: StunTimer4/5 は MyCastTime ≤ 1.5s のみ（BeforeResolveActions）
+
+DRU:
+  - クラス別 HealPct*（Fast / Regular / Group Regular）
+  - ヒールローテ1本・sortByHealThreshold
+  - 初期値はすべて 0
+  - ProcBuff: Artifact of the Jaguar（CLR/DRU/ENC/MAG/NEC/SHM/WIZ のみ。Pet は対象外）
+
+MNK:
+  - FeignAggro（既定70）: Named かつメインターゲットでないとき Aggro% 到達で FD（Emergency Feign オン時）
+  - 既存の Emergency Feign（Aggro100% + 低HP/Named）はそのまま
+
+SHD:
+  - BeforeResolveActions（LifeTap 本数等）
+  - バックアップ版の Ability / Loadout 差分
+
+  - HateToolsNeeded: Secondary > 70%、Named 条件なし（PAL/SHD/WAR 共通入口）
+  - SHD HateTools(AutoTarget): Terror/PowerTapAC の個別 Aggro 条件を削除（入口に統一）
+  - PAL/SHD/WAR HateTools*: ローテ単位 IgnoreImmuneCheck（Terror 等も Magic Immune でスキップしない）
+
+--------------------------------------------------------------------------------
+3. Named / Immune
+--------------------------------------------------------------------------------
+  - 本家 modules/spawns.lua + spawnlist/（eqmight.lua 等）
+  - UseImmuneData: 同梱データのみ。ユーザー /rgl immuneadd・Spawns タブは常時有効
+  - 旧 modules/named.lua + namedlist/ は本家で Spawns に統合済みのため別途コピー不要
+
+--------------------------------------------------------------------------------
+4. 触らないもの
+--------------------------------------------------------------------------------
+  - config/ButtonMaster.lua、macros/LDON.mac 等の外部起動コマンド
+  - 設定DBパス config/rgmercs/
+  - 改造の本体は常に lua/rgmercs-kesh（lua/rgmercs と混同しない）
+
+--------------------------------------------------------------------------------
+5. SHM AE Malo（Idol of Malo / Malos）連発防止
+--------------------------------------------------------------------------------
+  - 原因: DetSpellCheck は罠（Soul Idol）を見ない → 連発 → max traps
+  - 対策: SpawnCount("Soul Idol radius 50") == 0 のときだけキャスト（実測確認済み）
+
+================================================================================
+EOF
+================================================================================

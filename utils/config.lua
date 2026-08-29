@@ -1,0 +1,4717 @@
+local mq       = require('mq')
+local Set      = require("mq.Set")
+local Comms    = require("utils.comms")
+local Files    = require("utils.files")
+local Globals  = require("utils.globals")
+local Logger   = require("utils.logger")
+local Modules  = require("utils.modules")
+local Strings  = require("utils.strings")
+local Tables   = require("utils.tables")
+
+local Config   = {
+    _version    = '2.2.0',
+    _subVersion = "Shattering of Ro",
+    _name       = "Config",
+    _AppName    = "RGMercs Lua Edition",
+    _author     = 'Lead Devs: Derple, Algar',
+}
+Config.__index = Config
+Config.Db      = require("utils.config_db").new(mq.configDir .. '/rgmercs/rgmercs_config.db')
+Config.Db:setCollectStats(true)
+Config.moduleDefaultSettings                             = {}
+Config.moduleTempSettings                                = {}
+Config.moduleSettingCategories                           = {}
+Config.observedPeer                                      = ""
+Config.peerModuleSettings                                = {}
+Config.peerModuleDefaultSettings                         = {}
+Config.peerModuleSettingCategories                       = {}
+Config.FAQ                                               = {}
+Config.SettingsLoadComplete                              = false
+Config.DbConsistencyCheckPass                            = true
+Config.UnitTestsPass                                     = true
+
+Config.TempSettings                                      = {}
+Config.TempSettings.lastModuleRegisteredTime             = 0
+Config.TempSettings.lastHighlightTime                    = Globals.GetTimeSeconds()
+Config.TempSettings.SettingToModuleCache                 = {}
+Config.TempSettings.SettingToScopeCache                  = {}
+Config.TempSettings.SettingsLowerToNameCache             = {}
+Config.TempSettings.SettingsCategoryToSettingMapping     = {}
+Config.TempSettings.PeerModuleSettingsLowerToNameCache   = {}
+Config.TempSettings.PeerSettingToModuleCache             = {}
+Config.TempSettings.PeerSettingsCategoryToSettingMapping = {}
+Config.TempSettings.LastPeerConfigReceivedTime           = 0
+Config.TempSettings.ResetOptionsUIPosition               = false
+
+Config.TempSettings.HighlightedModules                   = Set.new({})
+
+-- Legacy Support
+Config.Globals                                           = Globals
+
+-- Constants
+Config.Constants                                         = Globals.Constants
+
+Config.FAQ                                               = {
+    {
+        Question = "What do Announcements do?",
+        Answer = "  Announcments are used to broadcast the selected options to the DanNet channel. The Group Announce optios will output the announcement to /gsay.",
+        Settings_Used = "",
+    },
+    {
+        Question = "I want to manually control my driver and choose my own targets. What do I need to adjust?",
+        Answer = "The following settings may require adjustment to drive yourself:\n\n" ..
+            "Targeting:\nAuto Target (controls scanning for and autotargeting combat targets).\n\n" ..
+            "Assisting:\nAuto Engage (controls moving to a target, automatically initiating combat, and taking offensive actions).\n\n" ..
+            "Positioning:\nFace Target In Combat (Mercs will still assume you are facing properly for abilities that require it!)\n\n" ..
+            "Positioning:\nAuto Navigation (controls /nav commands used in combat to close with the target)\n\n" ..
+            "Positioning:\nAuto Stick (controls /stick commands used in combat to stay near the target)\n\n" ..
+            "Mercs will still manage the action, and we should return to the target you had if needed after a heal, buff, item use, etc. You can pause mercs to take full control." ..
+            "These settings and interactions have been recently adjusted, and feedback is requested if you see something not quite right!",
+        Settings_Used = "",
+    },
+    {
+        Question = "How do I force auto combat on a target that isn't aggressive or isn't hostile, like a target dummy, object, or special NPC?",
+        Answer = "This is accomplished with the /rgl forcetarget <id?> command:\n\n" ..
+            "The command accepts a target ID, and will fall back to your current target's ID if one is not supplied.\n\n" ..
+            "When commanded, the PC will add the target to the first XT slot and immediately force target.\n\n" ..
+            "The force target state can be issued to any PC, but if issued by the MA, it will be broadcasted to peers via actors, and will allow the target to check as valid even when the 'Target Non-Aggressives' setting is disabled." ..
+            "Only one Force Target can be directed at a time, and the state will be cleared automatically. It can be cleared manually with the /rgl forcetargetclear command.",
+        Settings_Used = "",
+    },
+    {
+        Question = "How do I get help or support with a question, concern or issue, or, how do I provide feedback?",
+        Answer = "Please make a basic attempt to search for the answer using the (searchable!) in-game FAQs, settings and command lists." ..
+            "Still need help? No problem! You can find us in a few spots:\n\n" ..
+            "    The #rg-mercs discord channel on the RedGuides discord...\n\n" ..
+            "    The RGMercs general forum (for questions/feedback) or the RGMercs support forum (for issues) on the RedGuides forums at redguides.com..." ..
+            "    Any 'MQ' style discord channel for a server we have a default config for (i.e, EQ Might, Project Lazarus).\n\n" ..
+            "Please do NOT DM, PM or otherwise privately contact RGMercs devs without personal invitation.",
+        Settings_Used = "",
+    },
+}
+-- Defaults
+Config.DefaultConfig                                     = {
+
+    -- Custom: These use custom UI elements and do not display in normal settings windows.
+    ['ClassConfigDir']             = {
+        DisplayName = "Class Config Dir",
+        Type = "Custom",
+        Default = function()
+            local server = "Live"
+            if Globals.BuildType:lower() == "emu" then
+                if Globals.Constants.DefaultEmuServers:contains(Globals.CurServer) then
+                    server = Globals.CurServer
+                elseif Globals.CurServer:lower() == "project might" then
+                    server = "EQ Might"
+                end
+            end
+            return server
+        end,
+    },
+    ['AssistList']                 = {
+        DisplayName = "List of User-Defined Assists",
+        Type = "Custom",
+        Default = {},
+    },
+    ['HealList']                   = {
+        DisplayName = "List of User-Defined Heal Targets",
+        Type = "Custom",
+        Default = {},
+    },
+    ['ShowAdvancedOpts']           = {
+        DisplayName = "Show Advanced Options",
+        Type = "Custom",
+        Default = false,
+    },
+    ['PopOutForceTarget']          = {
+        DisplayName = "Pop Out Force Target",
+        Type = "Custom",
+        Default = false,
+    },
+    ['PopOutMercsStatus']          = {
+        DisplayName = "Pop Out Mercs Status",
+        Type = "Custom",
+        Default = false,
+    },
+    ['PopOutConsole']              = {
+        DisplayName = "Pop Out Console",
+        Type = "Custom",
+        Default = false,
+    },
+    ['MainWindowLocked']           = {
+        DisplayName = "Main Window Locked",
+        Default = false,
+        Type = "Custom",
+    },
+    ['HeartbeatAnnounceGroup']     = {
+        DisplayName = "Heartbeat Announce to Group",
+        Type = "Custom",
+        Default = false,
+        Tooltip = "Announces received heartbeats in /gsay. (Warning: spammy.)",
+    },
+
+    -- Announcements
+    ['AnnounceTarget']             = {
+        DisplayName = "Announce Target",
+        Group = "General",
+        Header = "Announcements",
+        Category = "Announcements",
+        Index = 1,
+        Tooltip = "Announces the current combat target. Uses KissAssist format.",
+        Default = false,
+        ConfigType = "Advanced",
+    },
+    ['AnnounceTargetGroup']        = {
+        DisplayName = "Announce Target to Group",
+        Group = "General",
+        Header = "Announcements",
+        Category = "Announcements",
+        Index = 2,
+        Tooltip = "Announces Target over /gsay.",
+        Default = false,
+        ConfigType = "Advanced",
+    },
+    ['MezAnnounce']                = {
+        DisplayName = "Mez Announce",
+        Group = "General",
+        Header = "Announcements",
+        Category = "Announcements",
+        Index = 3,
+        Default = false,
+        Tooltip = "Announces mez use.",
+        ConfigType = "Advanced",
+    },
+    ['MezAnnounceGroup']           = {
+        DisplayName = "Mez Announce to Group",
+        Group = "General",
+        Header = "Announcements",
+        Category = "Announcements",
+        Index = 4,
+        Default = false,
+        Tooltip = "Announces mez use to /gsay.",
+        ConfigType = "Advanced",
+    },
+    ['CharmAnnounce']              = {
+        DisplayName = "Charm Announce",
+        Group = "General",
+        Header = "Announcements",
+        Category = "Announcements",
+        Index = 5,
+        Default = false,
+        Tooltip = "Announces charm use.",
+        ConfigType = "Advanced",
+    },
+    ['CharmAnnounceGroup']         = {
+        DisplayName = "Charm Announce to Group",
+        Group = "General",
+        Header = "Announcements",
+        Category = "Announcements",
+        Index = 6,
+        Default = false,
+        Tooltip = "Announces charm use to /gsay.",
+        ConfigType = "Advanced",
+    },
+    ['HealAnnounce']               = {
+        DisplayName = "Heal Announce",
+        Group = "General",
+        Header = "Announcements",
+        Category = "Announcements",
+        Index = 7,
+        Default = false,
+        Tooltip = "Announces heal spell use.",
+        ConfigType = "Advanced",
+    },
+    ['HealAnnounceGroup']          = {
+        DisplayName = "Heal Announce to Group",
+        Group = "General",
+        Header = "Announcements",
+        Category = "Announcements",
+        Index = 8,
+        Default = false,
+        Tooltip = "Announces heal spell use to /gsay.",
+        ConfigType = "Advanced",
+    },
+    ['CureAnnounce']               = {
+        DisplayName = "Cure Announce",
+        Group = "General",
+        Header = "Announcements",
+        Category = "Announcements",
+        Index = 9,
+        Default = false,
+        Tooltip = "Announces cure use.",
+        ConfigType = "Advanced",
+    },
+    ['CureAnnounceGroup']          = {
+        DisplayName = "Cure Announce to Group",
+        Group = "General",
+        Header = "Announcements",
+        Category = "Announcements",
+        Index = 10,
+        Default = false,
+        Tooltip = "Announces cure use to /gsay.",
+        ConfigType = "Advanced",
+    },
+    ['RezAnnounce']                = {
+        DisplayName = "Rez Announce",
+        Group = "General",
+        Header = "Announcements",
+        Category = "Announcements",
+        Index = 11,
+        Default = false,
+        Tooltip = "Announces rez use.",
+        ConfigType = "Advanced",
+    },
+    ['RezAnnounceGroup']           = {
+        DisplayName = "Rez Announce to Group",
+        Group = "General",
+        Header = "Announcements",
+        Category = "Announcements",
+        Index = 12,
+        Default = false,
+        Tooltip = "Announces rez use to /gsay.",
+        ConfigType = "Advanced",
+    },
+    ['DispelAnnounce']             = {
+        DisplayName = "Dispel Announce",
+        Group = "General",
+        Header = "Announcements",
+        Category = "Announcements",
+        Index = 13,
+        Default = false,
+        Tooltip = "Announces dispel use.",
+        ConfigType = "Advanced",
+    },
+    ['DispelAnnounceGroup']        = {
+        DisplayName = "Dispel Announce to Group",
+        Group = "General",
+        Header = "Announcements",
+        Category = "Announcements",
+        Index = 14,
+        Default = false,
+        Tooltip = "Announces dispel use to /gsay.",
+        ConfigType = "Advanced",
+    },
+    ['ReagentAnnounce']            = {
+        DisplayName = "Reagent Announce",
+        Group = "General",
+        Header = "Announcements",
+        Category = "Announcements",
+        Index = 15,
+        Default = false,
+        Tooltip = "Announces an aborted cast due to missing spell reagent.",
+        ConfigType = "Advanced",
+    },
+    ['ReagentAnnounceGroup']       = {
+        DisplayName = "Reagent Announce to Group",
+        Group = "General",
+        Header = "Announcements",
+        Category = "Announcements",
+        Index = 16,
+        Default = false,
+        Tooltip = "Announces an aborted cast due to missing spell reagent to /gsay. (Warning: Often spammy.)",
+        ConfigType = "Advanced",
+    },
+    ['PullAnnounce']               = {
+        DisplayName = "Pull Announce",
+        Group = "General",
+        Header = "Announcements",
+        Category = "Announcements",
+        Index = 17,
+        Default = false,
+        Tooltip = "Announce pull-related messages.",
+        ConfigType = "Advanced",
+    },
+    ['PullAnnounceGroup']          = {
+        DisplayName = "Pull Announce to Group",
+        Group = "General",
+        Header = "Announcements",
+        Category = "Announcements",
+        Index = 18,
+        Default = false,
+        Tooltip = "Announce pull-related messages in /gsay. (Warning: Often spammy.)",
+        ConfigType = "Advanced",
+    },
+    ['BurnAnnounce']               = {
+        DisplayName = "Burn Announce",
+        Group = "General",
+        Header = "Announcements",
+        Category = "Announcements",
+        Index = 19,
+        Default = false,
+        Tooltip = "Announce burn-related messages.",
+        ConfigType = "Advanced",
+    },
+    ['BurnAnnounceGroup']          = {
+        DisplayName = "Burn Announce to Group",
+        Group = "General",
+        Header = "Announcements",
+        Category = "Announcements",
+        Index = 20,
+        Default = false,
+        Tooltip = "Announce burn-related messages in /gsay. (Warning: Often spammy.)",
+        ConfigType = "Advanced",
+    },
+    ['CharacterFlagAnnounce']      = {
+        DisplayName = "Character Flag Announce",
+        Group = "General",
+        Header = "Announcements",
+        Category = "Announcements",
+        Index = 21,
+        Default = false,
+        Tooltip = "Announces when a character flag is received.",
+        ConfigType = "Advanced",
+    },
+    ['CharacterFlagAnnounceGroup'] = {
+        DisplayName = "Character Flag Announce to Group",
+        Group = "General",
+        Header = "Announcements",
+        Category = "Announcements",
+        Index = 22,
+        Default = false,
+        Tooltip = "Announces when a character flag is received.",
+        ConfigType = "Advanced",
+    },
+    ['AnnounceToRaidIfInRaid']     = {
+        DisplayName = "Announce to Raid if In Raid",
+        Group = "General",
+        Header = "Announcements",
+        Category = "Announcements",
+        Index = 23,
+        Tooltip = "If in a raid, announcements will go to raid instead of group.",
+        Default = false,
+        ConfigType = "Advanced",
+    },
+
+    --Misc
+    ['InstantRelease']             = { --Algarnote: Wondering who uses this? I can't imagine a usecase that doesn't involve scripts or afk and this could be handled in those scripts
+        DisplayName = "Instant Release",
+        Group = "General",
+        Header = "Misc",
+        Category = "Misc",
+        Index = 1,
+        Tooltip = "Instantly release to spawn point when you die.",
+        Default = false,
+        ConfigType = "Advanced",
+    },
+
+    -- Meditation/Med Rules
+    ['DoMed']                      = {
+        DisplayName = "Do Meditate",
+        Group = "Movement",
+        Header = "Meditation",
+        Category = "Med Rules",
+        Index = 1,
+        Tooltip = "Choose if/when to meditate.\nMay interfere with bard songs (refer to FAQ for 'Bard Meditation').",
+        Type = "Combo",
+        ComboOptions = { 'Off', 'Out of Combat', 'In and Out of Combat', },
+        Default = function() return Globals.CurLoadedClass == "BRD" and 1 or 2 end,
+        Min = 1,
+        Max = 3,
+        ConfigType = "Normal",
+    },
+    ['StandWhenDone']              = {
+        DisplayName = "Stand When Done Medding",
+        Group = "Movement",
+        Header = "Meditation",
+        Category = "Med Rules",
+        Index = 2,
+        Tooltip = "Force a stand to end meditation when thresholds are reached.",
+        Default = function() return Globals.CurLoadedClass == "BRD" end,
+    },
+    ['AfterCombatMedDelay']        = {
+        DisplayName = "After Combat Med Delay",
+        Group = "Movement",
+        Header = "Meditation",
+        Category = "Med Rules",
+        Index = 3,
+        Tooltip = "How may seconds to delay after combat before sitting to meditate.",
+        Default = 3,
+        Min = 0,
+        Max = 60,
+        ConfigType = "Advanced",
+    },
+    ['MedAggroCheck']              = {
+        DisplayName = "Med Aggro Check",
+        Group = "Movement",
+        Header = "Meditation",
+        Category = "Med Rules",
+        Index = 4,
+        Tooltip = "Force a stand when we have aggro higher than the Med Aggro Percent setting from an xtarget.",
+        Default = true,
+        ConfigType = "Advanced",
+    },
+    ['MedAggroPct']                = {
+        DisplayName = "Med Aggro Percent",
+        Group = "Movement",
+        Header = "Meditation",
+        Category = "Med Rules",
+        Index = 5,
+        Tooltip = "Aggro percent value for the Med Aggro Check.",
+        Default = 65,
+        Min = 1,
+        Max = 100,
+        ConfigType = "Advanced",
+    },
+
+    -- Meditation/Med Thresholds
+    ['HPMedPct']                   = {
+        DisplayName = "Med Start HP%",
+        Group = "Movement",
+        Header = "Meditation",
+        Category = "Med Thresholds",
+        Index = 1,
+        Tooltip = "Attempt to meditate when at or under this HP percentage.",
+        Default = 60,
+        Min = 1,
+        Max = 99,
+        ConfigType = "Advanced",
+    },
+    ['HPMedPctStop']               = {
+        DisplayName = "Med Stop HP%",
+        Group = "Movement",
+        Header = "Meditation",
+        Category = "Med Thresholds",
+        Index = 2,
+        Tooltip = "When meditating, allow meditation to end when at or over this HP percentage.",
+        Default = 90,
+        Min = 1,
+        Max = 100,
+        ConfigType = "Advanced",
+    },
+    ['ManaMedPct']                 = {
+        DisplayName = "Med Start Mana%",
+        Group = "Movement",
+        Header = "Meditation",
+        Category = "Med Thresholds",
+        Index = 3,
+        Tooltip = "Attempt to meditate when at or under this Mana percentage.",
+        Default = 60,
+        Min = 1,
+        Max = 99,
+        ConfigType = "Advanced",
+    },
+    ['ManaMedPctStop']             = {
+        DisplayName = "Med Stop Mana%",
+        Group = "Movement",
+        Header = "Meditation",
+        Category = "Med Thresholds",
+        Index = 4,
+        Tooltip = "When meditating, allow meditation to end when at or over this Mana percentage.",
+        Default = 90,
+        Min = 1,
+        Max = 100,
+        ConfigType = "Advanced",
+    },
+    ['EndMedPct']                  = {
+        DisplayName = "Med Start End%",
+        Group = "Movement",
+        Header = "Meditation",
+        Category = "Med Thresholds",
+        Index = 5,
+        Tooltip = "Attempt to meditate when at or under this Endurance percentage.",
+        Default = 60,
+        Min = 1,
+        Max = 99,
+        ConfigType = "Advanced",
+    },
+    ['EndMedPctStop']              = {
+        DisplayName = "Med Stop End%",
+        Group = "Movement",
+        Header = "Meditation",
+        Category = "Med Thresholds",
+        Index = 6,
+        Tooltip = "When meditating, allow meditation to end when at or over this Endurance percentage.",
+        Default = 90,
+        Min = 1,
+        Max = 100,
+        ConfigType = "Advanced",
+    },
+
+    -- Clickies(Pre-Configured)
+    ['ModRodUse']                  = {
+        DisplayName = "Mod Rod Use:",
+        Group = "Items",
+        Header = "Clickies",
+        Category = "General Clickies",
+        Index = 1,
+        Tooltip = "Use available Mod Rods or Azure Crystals when we have less that the Mod Rod Mana % setting.",
+        Type = "Combo",
+        ComboOptions = Globals.Constants.ModRodUse,
+        Default = 2,
+        Min = 1,
+        Max = 3,
+        ConfigType = "Advanced",
+    },
+    ['ModRodManaPct']              = {
+        DisplayName = "Mod Rod Mana %",
+        Group = "Items",
+        Header = "Clickies",
+        Category = "General Clickies",
+        Index = 2,
+        Tooltip = "Use the first available Mod Rod when at or under this mana percentage, as long as it won't kill us.",
+        Default = 60,
+        Min = 1,
+        Max = 99,
+        ConfigType = "Advanced",
+    },
+    ['DoMount']                    = {
+        DisplayName = "Summon Mount:",
+        Group = "Items",
+        Header = "Clickies",
+        Category = "General Clickies",
+        Index = 3,
+        Tooltip = "Choose how/when to use mounts. A character with melee combat enabled will only use a mount if set to use for the benefit.",
+        Type = "Combo",
+        ComboOptions = { 'Never', 'For use as mount', 'For benefit only', },
+        Default = 2,
+        Min = 1,
+        Max = 3,
+        ConfigType = "Normal",
+    },
+    ['MountItem']                  = {
+        DisplayName = "Mount Item",
+        Group = "Items",
+        Header = "Clickies",
+        Category = "General Clickies",
+        Index = 4,
+        Tooltip = "Mount Clicky item to use, or leave empty to use your Stat Mount for the benefit.",
+        Type = "ClickyItem",
+        Default = "",
+        ConfigType = "Normal",
+    },
+    ['DoFamiliarBenefit']          = {
+        DisplayName = "Do Familiar Benefit",
+        Group = "Items",
+        Header = "Clickies",
+        Category = "General Clickies",
+        Index = 5,
+        Tooltip = "Click a familiar item for its lasting benefit, then remove the familiar itself.",
+        Default = false,
+        ConfigType = "Normal",
+    },
+    ['FamiliarItem']               = {
+        DisplayName = "Familiar Item",
+        Group = "Items",
+        Header = "Clickies",
+        Category = "General Clickies",
+        Index = 6,
+        Tooltip = "Familiar Clicky item to use. Leave empty to use your Stat Familiar.",
+        Type = "ClickyItem",
+        Default = "",
+        ConfigType = "Normal",
+    },
+    ['DoIllusionBenefit']          = {
+        DisplayName = "Do Illusion Benefit",
+        Group = "Items",
+        Header = "Clickies",
+        Category = "General Clickies",
+        Index = 7,
+        Tooltip = "Click an illusion item for its lasting benefit, then remove the illusion itself.",
+        Default = false,
+        ConfigType = "Normal",
+    },
+    ['IllusionItem']               = {
+        DisplayName = "Illusion Item",
+        Group = "Items",
+        Header = "Clickies",
+        Category = "General Clickies",
+        Index = 8,
+        Tooltip = "Illusion Clicky item to use. Leave empty to use your Stat Illusion.",
+        Type = "ClickyItem",
+        Default = "",
+        ConfigType = "Normal",
+    },
+    ['DoShrink']                   = {
+        DisplayName = "Do Shrink",
+        Group = "Items",
+        Header = "Clickies",
+        Category = "General Clickies",
+        Index = 9,
+        Tooltip = "Use Shrink items.",
+        Default = false,
+        ConfigType = "Normal",
+    },
+    ['ShrinkItem']                 = {
+        DisplayName = "Shrink Item",
+        Group = "Items",
+        Header = "Clickies",
+        Category = "General Clickies",
+        Index = 10,
+        Tooltip = "Item to use to Shrink yourself.",
+        Type = "ClickyItem",
+        Default = "",
+        ConfigType = "Normal",
+    },
+
+    -- Pet/Pet Summoning
+    ['DoPet']                      = {
+        DisplayName = "Summon Pet",
+        Group = "Abilities",
+        Header = "Pet",
+        Category = "Pet Summoning",
+        Index = 1,
+        Tooltip = "Enable the summoning and buffing of pets.",
+        Default = true,
+        RequiresLoadoutChange = true,
+        ConfigType = "Normal",
+    },
+
+    -- Pet/Pet Buffs
+    ['DoShrinkPet']                = {
+        DisplayName = "Do Pet Shrink",
+        Group = "Abilities",
+        Header = "Pet",
+        Category = "Pet Buffs",
+        Index = 1,
+        Tooltip = "Use a Shrink Clicky on your pet.",
+        Default = false,
+        ConfigType = "Normal",
+    },
+    ['ShrinkPetItem']              = {
+        DisplayName = "Shrink Pet Item",
+        Group = "Abilities",
+        Header = "Pet",
+        Category = "Pet Buffs",
+        Index = 2,
+        Tooltip = "Item to use to shrink your pet.",
+        Type = "ClickyItem",
+        Default = "",
+        ConfigType = "Normal",
+    },
+
+    -- Behavior
+    ['AggressivelyMemorizeSpells'] = {
+        DisplayName = "Aggressively Mem Spells",
+        Group = "Abilities",
+        Header = "Behavior",
+        Category = "Spell Management",
+        Index = 1,
+        Tooltip = "If you have a very latent connection, and spell memorization gets stuck, this will attempt to fix it by resending the memspell command every x seconds.",
+        Default = false,
+        ConfigType = "Advanced",
+    },
+    ['AggressivelyMemorizeTimer']  = {
+        DisplayName = "Aggressively Mem Timer",
+        Group = "Abilities",
+        Header = "Behavior",
+        Category = "Spell Management",
+        Index = 2,
+        Tooltip = "How many seconds to wait before resending memspell commands when Aggressively Memorize Spells is enabled.",
+        Default = 1,
+        ConfigType = "Advanced",
+    },
+
+    -- Targeting
+    ['DoAutoTarget']               = {
+        DisplayName = "Auto Target",
+        Group = "Combat",
+        Header = "Targeting",
+        Category = "Targeting Behavior",
+        Index = 1,
+        Tooltip =
+        "MA: Allow RGMercs to scan for and assign targets in combat.\nNon-MA: Allow RGMercs to adjust your target to the MA-provided autotarget.\nTarget changes to use spells/songs/AA/items will occur, but you will return to your original target after doing so.",
+        Default = true,
+        ConfigType = "Advanced",
+    },
+    ['StayOnTarget']               = {
+        DisplayName = "Stay On Target",
+        Group = "Combat",
+        Header = "Targeting",
+        Category = "Targeting Behavior",
+        Index = 2,
+        Tooltip = "Once an autotarget is assigned, do not change that target.\n(Note: This will greatly interfere with MA Target Scan capability.)",
+        Default = false,
+        ConfigType = "Advanced",
+    },
+    ['AttemptSafeTargeting']       = {
+        DisplayName = "Attempt Safe Targeting",
+        Group = "Combat",
+        Header = "Targeting",
+        Category = "Targeting Behavior",
+        Index = 3,
+        Tooltip = "Attempt to avoid targeting or engaging mobs that are near strangers. This is a best-effort attempt with serious possible side effects (see FAQ).",
+        Default = false,
+        ConfigType = "Advanced",
+        FAQ = "What does Attempt Safe Targeting do?",
+        Answer = "Attempt Safe Targeting attempts to scan for the presence of strangers near mobs that are assessed for engagement. " ..
+            "This is a best-effort guess; unfortunately, who is targeting what is not exposed directly to the client in most cases.\n\n" ..
+            "A stranger is anyone who is not a Mercs peer, not in your group or raid, not in your guild, not a DanNet peer, and not on your assist or heal list.\n\n" ..
+            "This setting may be dangerous. While your current autotarget is protected, this could stop engagement of targets if a PC closes on YOUR position, " ..
+            "and mobs that are on XTarget, yet not engageable because of a nearby stranger, can interfere with various functions, such as downtime buffing, or even pulling modes.\n\n" ..
+            "We recommend this setting stay disabled. Players not using this feature may wish to familiarize themselves with the /rgl backoff command.",
+    },
+    ['TargetNonAggressives']       = {
+        DisplayName = "Target Non-Aggressives",
+        Group = "Combat",
+        Header = "Targeting",
+        Category = "Targeting Behavior",
+        Index = 4,
+        Tooltip =
+        "Allow targeting of NPCs that are not aggressive (hostile) if they are targeted by our MA.\nNote: If combat has been forced on the target (via a forcetarget command by this PC or the MA), the target will also be allowed.",
+        Default = false,
+        ConfigType = "Advanced",
+    },
+    ['StopAttackForPCs']           = {
+        DisplayName = "Stop Attack for PCs",
+        Group = "Combat",
+        Header = "Targeting",
+        Category = "Targeting Behavior",
+        Index = 5,
+        Tooltip = "Ensure that auto attack is turned off before targeting a PC to use a spell, song, AA, or item. May be required if PvP is enabled by flag, zone, or server.",
+        Default = false,
+        ConfigType = "Advanced",
+    },
+    ['AutoAttackSafetyCheck']      = {
+        DisplayName = "Auto Attack Safety Check",
+        Group = "Combat",
+        Header = "Targeting",
+        Category = "Targeting Behavior",
+        Index = 6,
+        Tooltip = "Turn off auto-attack if we are not in combat and not cleared to engage the current target.",
+        Default = false,
+        ConfigType = "Advanced",
+    },
+    ['ClearStuckXTargets']         = {
+        DisplayName = "Clear Stuck XTargets",
+        Group = "Combat",
+        Header = "Targeting",
+        Category = "Targeting Behavior",
+        Index = 7,
+        Tooltip =
+        "EMU only: during downtime, use the #clearxtargets command to remove bugged corpse entries from XTarget slots. Existing xtarget assignments will be preserved and regenerated.",
+        Default = (Globals.BuildType:lower() == "emu"),
+        ConfigType = "Advanced",
+    },
+    ['FallbackCombatDetection']    = {
+        DisplayName = "Fallback Combat Detection",
+        Group = "Combat",
+        Header = "Targeting",
+        Category = "Targeting Behavior",
+        Index = 8,
+        Tooltip = "In the absence of XTargets, area scan for nearby mobs to target, and stay in combat while we or a nearby peer are engaged.",
+        Default = (Globals.BuildType:lower() == "emu"),
+        ConfigType = "Advanced",
+    },
+
+    ['ScanNamedPriority']          = {
+        DisplayName = "Scan Priority:",
+        Group = "Combat",
+        Header = "Targeting",
+        Category = "MA Target Selection",
+        Index = 1,
+        Tooltip = "Choose whether this PC will prioritize Named or Non-Named mobs if set as MA.",
+        Type = "Combo",
+        ComboOptions = Globals.Constants.ScanNamedPriority,
+        Default = 1,
+        Min = 1,
+        Max = #Globals.Constants.ScanNamedPriority,
+        ConfigType = "Advanced",
+    },
+    ['ScanHPPriority']             = {
+        DisplayName = "Scan HP% Priority:",
+        Group = "Combat",
+        Header = "Targeting",
+        Category = "MA Target Selection",
+        Index = 2,
+        Tooltip = "Choose whether this PC will prioritize low or high HP% mobs if set as MA.\n" ..
+            "If no preference is selected, we will simply choose the lowest mob ID.",
+        Type = "Combo",
+        ComboOptions = Globals.Constants.ScanHPPriority,
+        Default = 1,
+        Min = 1,
+        Max = #Globals.Constants.ScanHPPriority,
+        ConfigType = "Advanced",
+    },
+    ['MAScanZRange']               = {
+        DisplayName = "Main Assist Scan ZRange",
+        Group = "Combat",
+        Header = "Targeting",
+        Category = "MA Target Selection",
+        Index = 3,
+        Tooltip = "Allowable height difference between mobs and the MA when scanning for targets.",
+        Default = 45,
+        Min = 15,
+        Max = 200,
+        ConfigType = "Advanced",
+    },
+    ['MAAggroScan']                = {
+        DisplayName = "MA Aggro Scan",
+        Group = "Combat",
+        Header = "Targeting",
+        Category = "MA Target Selection",
+        Index = 4,
+        Tooltip =
+        "Scan hate levels of XT haters and set the AutoTarget to those who aren't aggroed on this PC. This may be necessary for MAs in Tank Mode who lack snap aggro abilities, but can also lead to further aggro issues on other targets. Use with caution.",
+        Default = false,
+        ConfigType = "Advanced",
+        Warning = function()
+            if Config:GetSetting('MAAggroScan') and Config:GetSetting('TankAggroScan') then
+                return true,
+                    "Warning: MA Aggro Scan and Tank Aggro Scan are both enabled, this may be inefficient (it is possible for them to both find the same target Id)."
+            end
+            return false, ""
+        end,
+    },
+    --Remove the word "Beta" and change the default to true when the beta period is finished.
+    ['TankAggroScan']              = {
+        DisplayName = "Tank Aggro Scan",
+        Group = "Combat",
+        Header = "Targeting",
+        Category = "Tank Target Selection",
+        Index = 1,
+        Tooltip =
+            "Allow a PC in Tank Mode to independently select an xtarget to attempt to reclaim aggro, without affecting or changing the AutoTarget, even if they are also the MA.\n" ..
+            "The tank will continue to engage the AutoTarget, but will periodically change to the Aggro Target to use abilities found in the HateTools(AggroTarget) rotation.\n" ..
+            "If this tank is the MA, they will continue to broadcast the AutoTarget to any assisting RGMercs peer.",
+        Default = true,
+        RequiresLoadoutChange = true,
+        ConfigType = "Advanced",
+        Warning = function()
+            if Config:GetSetting('MAAggroScan') and Config:GetSetting('TankAggroScan') then
+                return true,
+                    "Warning: MA Aggro Scan and Tank Aggro Scan are both enabled, this may be inefficient (it is possible for them to both find the same target Id)."
+            end
+            return false, ""
+        end,
+    },
+    ['AggroScanRespectFT']         = {
+        DisplayName = "Respect Forced Target",
+        Group = "Combat",
+        Header = "Targeting",
+        Category = "Tank Target Selection",
+        Index = 2,
+        Tooltip = "If the Tank Aggro Scan is enabled and the current Auto Target is forced, stay on that target without switching to an Aggro Target.",
+        Default = true,
+        ConfigType = "Advanced",
+    },
+    ['OffTankAutoNoHate']          = {
+        DisplayName = "Off-Tank Auto NoHate",
+        Group = "Combat",
+        Header = "Targeting",
+        Category = "Tank Target Selection",
+        Index = 3,
+        Tooltip =
+            "Tank Mode only (off-tank): automatically mark the Group Main Tank's AutoTarget as NoHate so HateTools skip that mob.\n" ..
+            "Requires Group Main Tank to be set to someone other than yourself. Cleared when that peer dies, zones, heartbeat times out, or changes AutoTarget.\n" ..
+            "Manual NoHate entries are left alone. Does not peel on live aggro loss — only when the main tank peer is gone.",
+        Default = false,
+        ConfigType = "Advanced",
+    },
+
+    -- Assisting
+    ['DoAutoEngage']               = {
+        DisplayName = "Auto Engage",
+        Group = "Combat",
+        Header = "Assisting",
+        Category = "Assisting",
+        Index = 1,
+        Tooltip = "Automatically engage targets for combat actions.",
+        Default = true,
+    },
+    ['AutoAssistAt']               = {
+        DisplayName = "Auto Assist Percent",
+        Group = "Combat",
+        Header = "Assisting",
+        Category = "Assisting",
+        Index = 2,
+        Tooltip = "Begin combat actions against the auto target when its reaches this health percentage.",
+        Default = 98,
+        Min = 1,
+        Max = 100,
+    },
+    ['AssistRange']                = {
+        DisplayName = "Assist Range",
+        Group = "Combat",
+        Header = "Assisting",
+        Category = "Assisting",
+        Index = 3,
+        Tooltip = "Engage the combat target when it is within this distance.",
+        Default = 100,
+        Min = 0,
+        Max = 300,
+    },
+    ['DoMelee']                    = {
+        DisplayName = "Enable Melee Combat",
+        Group = "Combat",
+        Header = "Assisting",
+        Category = "Assisting",
+        Index = 4,
+        Tooltip = "Auto attack the combat target. (Ranger Only: Disable to use ranged combat.)",
+        Default = function() return Globals.Constants.RGMelee:contains(Globals.CurLoadedClass) end,
+        ConfigType = "Normal",
+    },
+    ['AllowMezBreak']              = {
+        DisplayName = "Allow Mez Break",
+        Group = "Combat",
+        Header = "Assisting",
+        Category = "Assisting",
+        Index = 5,
+        Tooltip = "Allow combat actions if the target is mezzed.",
+        Default = function() return Globals.Constants.RGTank:contains(Globals.CurLoadedClass) end,
+        ConfigType = "Advanced",
+    },
+    ['SkipFireSpells']             = {
+        DisplayName = "Skip Fire Spells",
+        Group = "Abilities",
+        Header = "Common",
+        Category = "Common Rules",
+        Index = 6,
+        Tooltip = "Don't use spells with a fire resist type (as long as they aren't flagged in the config to ignore this check).\n" ..
+            "This is a top-level setting that can be freely toggled without changing spell loadout. Refer to the Spawn List FAQs for more details.",
+        Default = false,
+        ConfigType = "Advanced",
+        FAQ = "How do the Skip <Element> Spells settings work?",
+        Answer = "If a skip is enabled, no entry whose underlying spell uses that element as a resist (fire/cold/magic/poison/disease) will be used.\n\n" ..
+            "Meant as a quick \"turn off for this fight\" override. For persistent per-mob behavior, use the Spawns module tab to flag specific mobs.\n\n" ..
+            "Note that some entries or entire rotations may intentionally ignore this check with the 'IgnoreImmuneCheck' flag.",
+    },
+    ['SkipColdSpells']             = {
+        DisplayName = "Skip Cold Spells",
+        Group = "Abilities",
+        Header = "Common",
+        Category = "Common Rules",
+        Index = 7,
+        Tooltip = "Don't use spells with a cold resist type (as long as they aren't flagged in the config to ignore this check).\n" ..
+            "This is a top-level setting that can be freely toggled without changing spell loadout. Refer to the Spawn List FAQs for more details.",
+        Default = false,
+        ConfigType = "Advanced",
+    },
+    ['SkipMagicSpells']            = {
+        DisplayName = "Skip Magic Spells",
+        Group = "Abilities",
+        Header = "Common",
+        Category = "Common Rules",
+        Index = 8,
+        Tooltip = "Don't use spells with a magic resist type (as long as they aren't flagged in the config to ignore this check).\n" ..
+            "This is a top-level setting that can be freely toggled without changing spell loadout. Refer to the Spawn List FAQs for more details.",
+        Default = false,
+        ConfigType = "Advanced",
+    },
+    ['SkipPoisonSpells']           = {
+        DisplayName = "Skip Poison Spells",
+        Group = "Abilities",
+        Header = "Common",
+        Category = "Common Rules",
+        Index = 9,
+        Tooltip = "Don't use spells with a poison resist type (as long as they aren't flagged in the config to ignore this check).\n" ..
+            "This is a top-level setting that can be freely toggled without changing spell loadout. Refer to the Spawn List FAQs for more details.",
+        Default = false,
+        ConfigType = "Advanced",
+    },
+    ['SkipDiseaseSpells']          = {
+        DisplayName = "Skip Disease Spells",
+        Group = "Abilities",
+        Header = "Common",
+        Category = "Common Rules",
+        Index = 10,
+        Tooltip = "Don't use spells with a disease resist type (as long as they aren't flagged in the config to ignore this check).\n" ..
+            "This is a top-level setting that can be freely toggled without changing spell loadout. Refer to the Spawn List FAQs for more details.",
+        Default = false,
+        ConfigType = "Advanced",
+    },
+    ['UseImmuneData']              = {
+        DisplayName = "Use Immune Data",
+        Group = "Abilities",
+        Header = "Common",
+        Category = "Common Rules",
+        Index = 11,
+        Tooltip = "Use immunity data shipped with RGMercs (if available) to automatically determine whether to skip a spell.\n" ..
+            "Refer to the Spawn List FAQs for more details.",
+        Default = true,
+        ConfigType = "Advanced",
+        OnChange = function() Modules:ExecModule("Spawns", "InvalidateSpawnList") end,
+        FAQ = "What does the Use Immune Data setting do?",
+        Answer = "The built-in RGMercs Spawn List *may* contain known immunity data for nameds - elemental (Fire/Cold/Magic/Poison/Disease) or status (Slow/Snare/Stun). " ..
+            "When this setting is enabled, RGMercs will use that data to automatically avoid casting spells those mobs are immune to.\n\n" ..
+            "Disable this if you'd prefer to rely only on your own custom flags, added via the Spawns module tab or the /rgl immuneadd command. " ..
+            "Your custom entries are never affected by this toggle.\n\n" ..
+            "Note: shipped flags are added only for mobs that are *effectively immune* (a resist value so high the spell will never land in practice). " ..
+            "Currently, this data has only been added for most named on the EQ Might or Project Might servers, as they heavily rely on elemental resists. This information does not matter on many other servers.",
+    },
+    ['DoPetCommands']              = {
+        DisplayName = "Pet Control",
+        Group = "Combat",
+        Header = "Assisting",
+        Category = "Assisting",
+        Index = 6,
+        Tooltip = "Allow RGMercs to issue pet commands.",
+        Default = true,
+        ConfigType = "Advanced",
+    },
+    ['PetEngagePct']               = {
+        DisplayName = "Pet Assist Percent",
+        Group = "Combat",
+        Header = "Assisting",
+        Category = "Assisting",
+        Index = 7,
+        Tooltip = "Send pets to attack the combat target when it reaches this health percentage.",
+        Default = 96,
+        Min = 1,
+        Max = 100,
+        ConfigType = "Advanced",
+    },
+    ['DoMercenary']                = {
+        DisplayName = "Merc Control",
+        Group = "Combat",
+        Header = "Assisting",
+        Category = "Assisting",
+        Index = 8,
+        Tooltip = "Allow RGMercs to issue mercenary commands.",
+        Default = (Globals.BuildType:lower() ~= "emu"),
+        ConfigType = "Normal",
+    },
+    ['MercStance']                 = {
+        DisplayName = "Merc Stance",
+        Group = "Combat",
+        Header = "Assisting",
+        Category = "Assisting",
+        Index = 9,
+        Tooltip =
+        "The stance to use for your merc. Since mercs have different stances, find the one for your current mercenary type.\nNote: an invalid stance selection will default to the first listed.",
+        Type = "Combo",
+        ComboOptions = { 'Aggressive or Balanced', 'Assist or Reactive or Burn', 'Efficient or Burn AE', },
+        Default = 2,
+        Min = 1,
+        Max = 3,
+        ConfigType = "Advanced",
+    },
+    ['UseAssistList']              = {
+        DisplayName = "Use Assist List",
+        Group = "Combat",
+        Header = "Assisting",
+        Category = "Assisting",
+        Index = 10,
+        Tooltip = "Use names from the Assist List to choose a Main Assist instead of assisting the EQ group or raid assist (see FAQs).",
+        Default = false,
+    },
+    ['RaidAssistTarget']           = {
+        DisplayName = "Raid Assist Target",
+        Group = "Combat",
+        Header = "Assisting",
+        Category = "Assisting",
+        Index = 11,
+        Tooltip = "Which Raid Assist target to follow. Please note that we will not fallback if this is not set properly.",
+        Type = "Combo",
+        ComboOptions = { 'First', 'Second', 'Third', },
+        Default = 1,
+        Min = 1,
+        Max = 3,
+        ConfigType = "Normal",
+    },
+    ['FollowMarkTarget']           = {
+        DisplayName = "Follow Mark Target",
+        Group = "Combat",
+        Header = "Assisting",
+        Category = "Assisting",
+        Index = 12,
+        Tooltip = "Prioritize the Marked target as the combat target.",
+        Default = false,
+        ConfigType = "Advanced",
+    },
+    ['SelfAssistFallback']         = {
+        DisplayName = "Self-Assist Fallback",
+        Group = "Combat",
+        Header = "Assisting",
+        Category = "Assisting",
+        Index = 13,
+        Tooltip = "If no other valid MA is found, fallback to ourselves.\nPlease note that when solo (and not using the Assist List), we are always our own MA.",
+        Type = "Combo",
+        ComboOptions = { 'Never', 'Only in Groups', 'Only in Raids', 'Always', },
+        Default = 4,
+        Min = 1,
+        Max = 4,
+        ConfigType = "Advanced",
+    },
+
+    -- Positioning/General
+    ['FaceTarget']                 = {
+        DisplayName = "Face Target in Combat",
+        Group = "Combat",
+        Header = "Positioning",
+        Category = "General Positioning",
+        Index = 1,
+        Tooltip = "Periodically /face your target while in combat.",
+        Default = true,
+        ConfigType = "Advanced",
+        OnChange = function(oldVal, newVal)
+            Config:SetSetting('ManualMode', false, false, true)
+        end,
+    },
+    ['StickDistance']              = {
+        DisplayName = "Stick Distance",
+        Group = "Combat",
+        Header = "Positioning",
+        Category = "General Positioning",
+        Index = 2,
+        Tooltip = "Stick / Melee Nav distance. Leave blank for MaxRangeTo x 0.7 (same value for Nav and Stick).",
+        Default = "",
+        Hint = "Automatic: MaxRangeTo x 0.7",
+        ConfigType = "Advanced",
+    },
+    ['StickArgs']                  = {
+        DisplayName = "Stick Arguments",
+        Group = "Combat",
+        Header = "Positioning",
+        Category = "General Positioning",
+        Index = 3,
+        Tooltip = "Custom /stick flags, not including distance; leave blank to use role-based defaults.",
+        Default = "",
+        Hint = function() return require('utils.movement').GetDefaultStickArgs() .. " (default)" end,
+        ConfigType = "Advanced",
+        FAQ = "What are the default stick settings?",
+        Answer = "Blank Stick Distance uses MaxRangeTo x 0.7 for both Melee Nav and Stick, so Engage does not approach twice with different distances.\n" ..
+            "Ranged sticks (Use Ranged Stick) use these settings as well, but default their distance to Bow Range when set.",
+    },
+    ['BellyCastStick']             = {
+        DisplayName = "Stick for Belly Cast",
+        Group = "Combat",
+        Header = "Positioning",
+        Category = "General Positioning",
+        Index = 4,
+        Tooltip = "If Melee Combat is disabled, pin at 40 units on named with a dragon bodytype in case of possible bellycaster.",
+        Default = false,
+        ConfigType = "Advanced",
+    },
+    ['AutoStandFD']                = {
+        DisplayName = "Stand from FD in Combat",
+        Group = "Combat",
+        Header = "Positioning",
+        Category = "General Positioning",
+        Index = 5,
+        Tooltip = "Stand up if feigning at the start of combat.",
+        Default = true,
+        ConfigType = "Advanced",
+    },
+    ['HandleCantSeeTarget']        = {
+        DisplayName = "Handle Cannot See Target",
+        Group = "Combat",
+        Header = "Positioning",
+        Category = "General Positioning",
+        Index = 6,
+        Tooltip = "Attempt to adjust positioning if you receive a 'cannot see your target' message.",
+        Default = true,
+        ConfigType = "Advanced",
+        OnChange = function(oldVal, newVal)
+            Config:SetSetting('ManualMode', false, false, true)
+        end,
+    },
+    ['HandleTooClose']             = {
+        DisplayName = "Handle Too Close",
+        Group = "Combat",
+        Header = "Positioning",
+        Category = "General Positioning",
+        Index = 7,
+        Tooltip = "Attempt to adjust positioning if you receive a 'too close to use a ranged weapon' message.",
+        Default = true,
+        ConfigType = "Advanced",
+        OnChange = function(oldVal, newVal)
+            Config:SetSetting('ManualMode', false, false, true)
+        end,
+    },
+    ['HandleTooFar']               = {
+        DisplayName = "Handle Too Far",
+        Group = "Combat",
+        Header = "Positioning",
+        Category = "General Positioning",
+        Index = 8,
+        Tooltip = "Attempt to adjust positioning if you receive a 'too far away' or 'cant hit them from here' message.",
+        Default = true,
+        ConfigType = "Advanced",
+        OnChange = function(oldVal, newVal)
+            Config:SetSetting('ManualMode', false, false, true)
+        end,
+    },
+    ['DoAutoNav']                  = {
+        DisplayName = "Enable Auto Navigation",
+        Group = "Combat",
+        Header = "Positioning",
+        Category = "General Positioning",
+        Index = 9,
+        Tooltip = "Enables RGMercs to issue Navigation Commands in Combat. Disable if you wish to manually control movement.",
+        Default = true,
+        ConfigType = "Advanced",
+        OnChange = function(oldVal, newVal)
+            Config:SetSetting('ManualMode', false, false, true)
+        end,
+    },
+    ['DoAutoStick']                = {
+        DisplayName = "Enable Auto Stick",
+        Group = "Combat",
+        Header = "Positioning",
+        Category = "General Positioning",
+        Index = 10,
+        Tooltip = "Enables RGMercs to issue Stick Commands in Combat. Disable if you wish to manually control movement.",
+        Default = true,
+        ConfigType = "Advanced",
+        OnChange = function(oldVal, newVal)
+            Config:SetSetting('ManualMode', false, false, true)
+        end,
+    },
+    ['ManualMode']                 = {
+        DisplayName = "Manual Mode",
+        Group = "Combat",
+        Header = "Positioning",
+        Category = "General Positioning",
+        Index = 11,
+        Tooltip =
+        "This will disable all automated movement on your character but not using abilities.",
+        Default = false,
+        OnChange = function(oldVal, newVal)
+            local settings = { 'DoAutoNav', 'DoAutoStick', 'FaceTarget', 'HandleCantSeeTarget', 'HandleTooClose', 'HandleTooFar', }
+
+            for _, setting in ipairs(settings) do
+                Config:SetSetting(setting, not newVal, false, true)
+            end
+
+            if newVal then
+                Config:SetSetting('ChaseOn', false, false, true)
+            end
+
+            Logger.log_info("Manual Mode has been " .. (newVal and "enabled" or "disabled"))
+        end,
+        FAQ = "I want to control my character's movement but still have it use abilities, how can I do that?",
+        Answer =
+        "If you enable Manual Mode, it will disable all automated movement options for your character, but will still allow it to use abilities as normal. This is ideal for those who want to control their character's positioning manually, but still want to benefit from the spell and item usage of RGMercs. Please note that enabling this will also disable some features that rely on movement automation, such as handling 'cannot see target' messages or auto-facing the target in combat.",
+    },
+    ['RepositionPet']              = {
+        DisplayName = "Reposition Pet",
+        Group = "Combat",
+        Header = "Positioning",
+        Category = "General Positioning",
+        Index = 12,
+        Tooltip = "Use summon and move AA to reposition your pet to avoid ripostes. (We will always summon a far out-of-range pet during combat if able).",
+        Default = false,
+    },
+
+    -- Positioning/Tank
+    ['MovebackWhenTank']           = {
+        DisplayName = "Moveback as Tank",
+        Group = "Combat",
+        Header = "Positioning",
+        Category = "Tank Positioning",
+        Index = 1,
+        Tooltip = "Adds 'moveback' to the default stick command when tanking. Helpful to keep mobs from getting behind you.",
+        Default = false,
+        ConfigType = "Advanced",
+    },
+    ['KeepMobsInFront']            = {
+        DisplayName = "Keep Mobs in Front",
+        Group = "Combat",
+        Header = "Positioning",
+        Category = "Tank Positioning",
+        Index = 2,
+        Tooltip = "While tanking, reposition to keep haters in your front arc.\nMethod is selected by Tank Reposition Mode below.",
+        Default = true,
+        ConfigType = "Advanced",
+    },
+    ['TankRepositionMode']         = {
+        DisplayName = "Tank Reposition Mode",
+        Group = "Combat",
+        Header = "Positioning",
+        Category = "Tank Positioning",
+        Index = 3,
+        Tooltip = "How to reposition when Keep Mobs in Front detects a rear hater.\n" ..
+            "Nav Mesh: lateral/backslide /nav around the engaged mob (requires Auto Nav + mesh).\n" ..
+            "Stick Snaproll: /stick snaproll id <AutoTarget> loose uw (requires Auto Stick).",
+        Type = "Combo",
+        ComboOptions = { 'Nav Mesh', 'Stick Snaproll', },
+        Default = 1,
+        Min = 1,
+        Max = 2,
+        ConfigType = "Advanced",
+    },
+
+    --Common/Rules
+    ['MobLowHP']                   = {
+        DisplayName = "Mob Low HP%",
+        Group = "Abilities",
+        Header = "Common",
+        Category = "Common Rules",
+        Index = 1,
+        Tooltip = "A mob is considered to be low HP (for the sake of snares, dots and other abilities) under x HP%.",
+        Default = 50,
+        Min = 1,
+        Max = 100,
+    },
+    ['NamedLowHP']                 = {
+        DisplayName = "Named Low HP%",
+        Group = "Abilities",
+        Header = "Common",
+        Category = "Common Rules",
+        Index = 2,
+        Tooltip = "A named mob is considered to be low HP (for the sake of snares, dots and other abilities) under x HP%.",
+        Default = 25,
+        Min = 1,
+        Max = 100,
+    },
+    ['AggroThrottling']            = {
+        DisplayName = "Use Aggro Throttling",
+        Group = "Abilities",
+        Header = "Common",
+        Category = "Common Rules",
+        Index = 3,
+        Tooltip = "(Non-Tank Modes): Don't use nukes and similar spells when your aggro percent is above the Aggro To Cast value below.",
+        Default = true,
+        ConfigType = "Advanced",
+    },
+    ['MobMaxAggro']                = {
+        DisplayName = "Start Aggro Throttle:",
+        Group = "Abilities",
+        Header = "Common",
+        Category = "Common Rules",
+        Index = 4,
+        Tooltip = "(Non-Tank Modes) Maximum % Aggro for most offensive actions if Aggro Throttling is enabled.",
+        Default = 90,
+        Min = 1,
+        Max = 999,
+        ConfigType = "Advanced",
+    },
+    ['IgnoreLevelCheck']           = {
+        DisplayName = "Ignore Spell Level Checks",
+        Group = "Abilities",
+        Header = "Common",
+        Category = "Common Rules",
+        Index = 5,
+        Tooltip = "Ignore checks for minimum level on spells. Used on servers that allow heals, buffs and other spells to land on PCs regardless of level.",
+        Default = Globals.ServerEnv:lower() ~= "live", -- more emu servers ignore level checks than not, and all the ones we support currently do. lesser of two evils.
+        ConfigType = "Advanced",
+    },
+    -- Common/Under the Hood
+    ['CastRetryCount']             = {
+        DisplayName = "Cast Retry Count",
+        Group = "Abilities",
+        Header = "Common",
+        Category = "Under the Hood",
+        Index = 1,
+        Tooltip = "The amount of times to try to recast a spell, song, AA, or item due to a fizzle, interrupt, or similar. Note that queued actions already have a retry built-in.",
+        Default = function() return Globals.CurLoadedClass == "BRD" and 1 or 0 end,
+        Min = 0,
+        Max = 5,
+        ConfigType = "Advanced",
+    },
+    ['CastReadyDelayFact']         = {
+        DisplayName = "Cast Ready Delay Factor",
+        Group = "Abilities",
+        Header = "Common",
+        Category = "Under the Hood",
+        Index = 2,
+        Tooltip = "Wait Ping * [n] ms before saying we are ready to cast.",
+        Default = 0,
+        Min = 0,
+        Max = 10,
+        ConfigType = "Advanced",
+    },
+    ['SongClipDelayFact']          = {
+        DisplayName = "Song Clip Delay Factor",
+        Group = "Abilities",
+        Header = "Common",
+        Category = "Under the Hood",
+        Index = 3,
+        Tooltip =
+        "Wait Ping * [n] ms to allow songs to take effect before singing the next. If this is set too low, the server may not register the song completion before we /stopsong.\nSetting this lower will not increase performance, as we will stop delaying as soon as the song buff is detected. This is strictly to solve for song clipping for those with high latency!",
+        Default = 2,
+        Min = 1,
+        Max = 10,
+        ConfigType = "Advanced",
+    },
+
+    -- Damage/Direct
+    ['ManaToNuke']                 = {
+        DisplayName = "Mana to Nuke",
+        Group = "Abilities",
+        Header = "Damage",
+        Category = "Direct",
+        Index = 1,
+        Tooltip =
+        "Minimum % Mana in order to continue to cast nukes.\n\nThis setting is largely aimed at hybrids or healers maintaining a mana reserve. Some default configs (MAG, WIZ) may not always respect this setting.",
+        Default = 30,
+        Min = 1,
+        Max = 100,
+    },
+    --Damage/Over Time
+    ['ManaToDot']                  = {
+        DisplayName = "Mana to Dot",
+        Group = "Abilities",
+        Header = "Damage",
+        Category = "Over Time",
+        Index = 1,
+        Tooltip =
+        "Minimum % Mana in order to continue to cast dots.\n\nThis setting is largely aimed at hybrids or healers maintaining a mana reserve. Some default configs (NEC) may not always respect this setting.",
+        Default = 30,
+        Min = 1,
+        Max = 100,
+    },
+    -- Damage/AE
+    ['DoAEDamage']                 = {
+        DisplayName = "Do AE Damage",
+        Group = "Abilities",
+        Header = "Damage",
+        Category = "AE",
+        Index = 1,
+        Tooltip = "**WILL BREAK MEZ** Use AE damage Spells and AA. **WILL BREAK MEZ**\n" ..
+            "This is a top-level setting that governs all AE damage, and can be used as a quick-toggle to enable/disable abilities without reloading spells.",
+        Default = false,
+    },
+    ['AETargetCnt']                = {
+        DisplayName = "AE Target Count",
+        Group = "Abilities",
+        Header = "Damage",
+        Category = "AE",
+        Index = 2,
+        Tooltip = "Minimum number of valid targets before using AE Disciplines or AA.",
+        Default = function() return Globals.Constants.RGTank:contains(Globals.CurLoadedClass) and 2 or 3 end,
+        Min = 1,
+        Max = 10,
+    },
+    ['MaxAETargetCnt']             = {
+        DisplayName = "Max AE Targets",
+        Group = "Abilities",
+        Header = "Damage",
+        Category = "AE",
+        Index = 3,
+        Tooltip =
+        "Maximum number of valid targets before using AE Spells, Disciplines or AA.\nUseful for setting up AE Mez at a higher threshold on another character in case you are overwhelmed.",
+        Default = 5,
+        Min = 2,
+        Max = 30,
+        FAQ = "How do I take advantage of the Max AE Targets setting?",
+        Answer =
+        "By limiting your max AE targets, you can set an AE Mez count that is slightly higher, to allow for the possiblity of mezzing if you are being overwhelmed.",
+    },
+    ['SafeAEDamage']               = {
+        DisplayName = "AE Proximity Check",
+        Group = "Abilities",
+        Header = "Damage",
+        Category = "AE",
+        Index = 4,
+        Tooltip = "Check to ensure there aren't neutral mobs in range we could aggro if AE damage is used. May result in non-use due to false positives.",
+        Default = false,
+        ConfigType = "Advanced",
+        FAQ = "Can you better explain the AE Proximity Check?",
+        Answer = "If the option is enabled, the script will use various checks to determine if a non-hostile or not-aggroed NPC is present and avoid use of the AE action.\n" ..
+            "Unfortunately, the script currently does not discern whether an NPC is (un)attackable, so at times this may lead to the action not being used when it is safe to do so.\n" ..
+            "PLEASE NOTE THAT THIS OPTION HAS NOTHING TO DO WITH MEZ!",
+    },
+
+    -- Debuffs
+    ['ManaToDebuff']               = {
+        DisplayName = "Mana to Debuff",
+        Group = "Abilities",
+        Header = "Debuffs",
+        Category = "Debuff Rules",
+        Index = 1,
+        Tooltip = "Minimum % Mana in order to continue to cast debuffs.",
+        Default = 10,
+        Min = 1,
+        Max = 100,
+    },
+    ['DebuffMinCon']               = {
+        DisplayName = "Debuff Min Con",
+        Group = "Abilities",
+        Header = "Debuffs",
+        Category = "Debuff Rules",
+        Index = 2,
+        Tooltip = "Min Con to use debuffs on when con-color debuffing is enabled for enemies.",
+        Default = 4,
+        Min = 1,
+        Max = #Globals.Constants.ConColors,
+        Type = "Combo",
+        ComboOptions = Globals.Constants.ConColors,
+        ConfigType = "Advanced",
+    },
+    ['MobDebuff']                  = {
+        DisplayName = "Mob Debuffing:",
+        Group = "Abilities",
+        Header = "Debuffs",
+        Category = "Debuff Rules",
+        Index = 3,
+        Tooltip = "The circumstances in which we will debuff a (non-named) mob.",
+        Default = 2,
+        Min = 1,
+        Max = #Globals.Constants.DebuffChoice,
+        Type = "Combo",
+        ComboOptions = Globals.Constants.DebuffChoice,
+        ConfigType = "Advanced",
+    },
+    ['NamedDebuff']                = {
+        DisplayName = "Named Debuffing:",
+        Group = "Abilities",
+        Header = "Debuffs",
+        Category = "Debuff Rules",
+        Index = 4,
+        Tooltip = "The circumstances in which we will debuff a (named) mob.",
+        Default = 2,
+        Min = 1,
+        Max = #Globals.Constants.DebuffChoice,
+        Type = "Combo",
+        ComboOptions = Globals.Constants.DebuffChoice,
+        ConfigType = "Advanced",
+    },
+    ['DispelAllowList']            = {
+        DisplayName = "Dispel Allow List",
+        Type = "Custom",
+        Default = {},
+    },
+    ['DispelDenyList']             = {
+        DisplayName = "Dispel Deny List",
+        Type = "Custom",
+        Default = {},
+    },
+    ['DispelAllowListShared']      = {
+        DisplayName = "Shared Dispel Allow List",
+        Type = "Custom",
+        Default = {},
+        Scope = "server",
+    },
+    ['DispelDenyListShared']       = {
+        DisplayName = "Shared Dispel Deny List",
+        Type = "Custom",
+        Default = {},
+        Scope = "server",
+    },
+    ['UseSharedDispelLists']       = {
+        DisplayName = "Use Shared Dispel Lists",
+        Type = "Custom",
+        Default = true,
+    },
+
+    -- Hate Reduction
+    ['DoHateReduction']            = {
+        DisplayName = "Do Hate Reduction",
+        Group = "Abilities",
+        Header = "Utility",
+        Category = "Hate Reduction",
+        Index = 1,
+        Tooltip = "(Non-Tank Modes): Use hate reduction abilities such as jolts, fades, feigns and evades when your aggro percent is high.\n" ..
+            "This is a top-level setting that governs all hate reduction, and can be used as a quick-toggle to enable/disable abilities without reloading spells.",
+        Default = true,
+    },
+
+    -- Emergency
+    ['StandFailedFD']              = {
+        DisplayName = "Stand on Failed FD",
+        Group = "Abilities",
+        Header = "Utility",
+        Category = "Emergency",
+        Index = 1,
+        Tooltip = "Stand up if a failed feign is detected ('fall to the ground').",
+        Default = true,
+        ConfigType = "Advanced",
+    },
+    ['EmergencyStart']             = {
+        DisplayName = "Emergency HP%",
+        Group = "Abilities",
+        Header = "Utility",
+        Category = "Emergency",
+        Index = 2,
+        Tooltip = "Your HP % before we begin to use emergency mitigation abilities.",
+        Default = function() return Globals.Constants.RGTank:contains(Globals.CurLoadedClass) and 40 or 50 end,
+        Min = 1,
+        Max = 100,
+    },
+    ['HPCritical']                 = {
+        DisplayName = "Critical HP%",
+        Group = "Abilities",
+        Header = "Utility",
+        Category = "Emergency",
+        Index = 3,
+        Tooltip = "Your HP % before we resort to our deepest emergency abilities.",
+        Default = function() return Globals.Constants.RGTank:contains(Globals.CurLoadedClass) and 20 or 30 end,
+        Min = 1,
+        Max = 100,
+    },
+
+    -- Buffs/Rules
+    ['DoBuffs']                    = {
+        DisplayName = "Do Downtime/Group Buffs",
+        Group = "Abilities",
+        Header = "Buffs",
+        Category = "Buff Rules",
+        Index = 1,
+        Tooltip = "Process Downtime and Group Buff Rotations (see your rotations on the class tab).",
+        Default = true,
+        ConfigType = "Advanced",
+    },
+    ['BuffWaitMoveTimer']          = {
+        DisplayName = "After-Move Buff Delay",
+        Group = "Abilities",
+        Header = "Buffs",
+        Category = "Buff Rules",
+        Index = 2,
+        Tooltip = "Seconds to wait after stopping movement before doing buffs.",
+        Default = 3,
+        Min = 0,
+        Max = 60,
+        ConfigType = "Advanced",
+    },
+    ['BuffRezables']               = {
+        DisplayName = "Buff Rezables",
+        Group = "Abilities",
+        Header = "Buffs",
+        Category = "Buff Rules",
+        Index = 3,
+        Tooltip = "Allow the buff cycle to continue in downtime if buff target corpses are present (buffs in combat do not check for corpses).",
+        Default = Globals.ServerEnv:lower() ~= "live",
+        ConfigType = "Advanced",
+    },
+    ['UseCounterActions']          = {
+        DisplayName = "Use Aureate's Bane", --this can be freely changed later if another system is added. Avoiding confusion for now.
+        Group = "Abilities",
+        Header = "Buffs",
+        Category = "Buff Rules",
+        Index = 4,
+        Tooltip =
+        "Automatically use counter actions (such as the Aureate's Bane AA to counter Curse of Subjugation in TOB zones.",
+        Default = Globals.ServerEnv:lower() == "live",
+    },
+    ['DowntimeSnareHotRemoval']    = {
+        DisplayName = "Downtime Snare HoT Removal",
+        Group = "Abilities",
+        Header = "Buffs",
+        Category = "Buff Rules",
+        Index = 5,
+        Tooltip = "Remove Torpor and similar spells during downtime, if you are above Emergency HP%.",
+        Default = true,
+        ConfigType = "Advanced",
+    },
+    ['BreakInvisForSay']           = {
+        DisplayName = "Break Invis for Say Commands",
+        Group = "Abilities",
+        Header = "Buffs",
+        Category = "Buff Rules",
+        Index = 6,
+        Tooltip = "Break Invis as part of /rgl say, qsay or rsay commands.",
+        Default = false,
+    },
+    ['ActorBuffScope']             = {
+        DisplayName = "Peer Buff Scope",
+        Group = "Abilities",
+        Header = "Buffs",
+        Category = "Buff Rules",
+        Index = 7,
+        Tooltip = "Choose who to use group buffs on. Targets other than your group must be RGMercs Peers (refer to the Peers FAQ).",
+        Default = 2,
+        Min = 1,
+        Max = 3,
+        Type = "Combo",
+        ComboOptions = { 'Group', 'Raid', 'Any In-Zone', },
+    },
+    ['BuffTargetingInterval']      = {
+        DisplayName = "Buff Targeting Interval",
+        Group = "Abilities",
+        Header = "Buffs",
+        Category = "Buff Rules",
+        Index = 8,
+        Tooltip =
+        "Minimum amount of time between targeting non-peer group members to check if buffs are needed (this is necessary for accuracy, buff data on a spawn is only updated when it is targeted).",
+        Default = 30,
+        Min = 1,
+        Max = 120,
+        ConfigType = "Advanced",
+    },
+    ['BuffAssistList']             = {
+        DisplayName = "Buff Assist List",
+        Group = "Abilities",
+        Header = "Buffs",
+        Category = "Buff Rules",
+        Index = 9,
+        Tooltip = "Process group buff rotations on members of the Assist List.",
+        Default = true,
+    },
+    ['DoActorPetBuffs']            = {
+        DisplayName = "Buff Pets as PCs",
+        Group = "Abilities",
+        Header = "Buffs",
+        Category = "Buff Rules",
+        Index = 10,
+        Tooltip =
+        "Allow group pets to be targeted in PC group buff rotations.\nNote that only the pets buffs of PCs who have this setting enabled are discoverable.\nFurther note this incurs a minor performance penalty and is not advised in most situations.",
+        Default = false,
+        ConfigType = "Advanced",
+        OnChange = function(oldValue, newValue)
+            if newValue == false then
+                Globals.CurrentPetBuffs = nil
+                Globals.CurrentPetBlocked = nil
+            end
+        end,
+    },
+
+    -- Buffs/Self
+    ['DoAlliance']                 = {
+        DisplayName = "Do Alliance",
+        Group = "Abilities",
+        Header = "Buffs",
+        Category = "Self",
+        Index = 99,
+        Tooltip = "Enable the use of Alliance spells (for supporting class configs, not every class config uses this).",
+        RequiresLoadoutChange = true,
+        Default = false,
+        ConfigType = "Advanced",
+    },
+
+    --Recovery/General
+    ['UseHealList']                = {
+        DisplayName = "Use Heal List",
+        Group = "Abilities",
+        Header = "Recovery",
+        Category = "General Healing",
+        Index = 2,
+        Tooltip = "Heal members of the Heal List instead of using xtarget healing (see FAQs).",
+        Default = false,
+    },
+    ['DoPetHeals']                 = {
+        DisplayName = "Heal Pets as PCs",
+        Group = "Abilities",
+        Header = "Recovery",
+        Category = "General Healing",
+        Index = 2,
+        Tooltip = "Allow pets of your groupmates to be targeted in PC healing rotations.\n" ..
+            "Note that CLR/DRU/PAL/SHM will reserve \"Big Heal\" rotations for PCs.\n" ..
+            "Further note that many abilities that heal the PC's own pet do not check this setting and are handled seperately.",
+        Default = true,
+        ConfigType = "Advanced",
+    },
+    ['BreakInvisForHealing']       = {
+        DisplayName = "Break Invis",
+        Group = "Abilities",
+        Header = "Recovery",
+        Category = "General Healing",
+        Index = 3,
+        Tooltip = "Break invis to heal, cure and rez when out of combat (Does not affect combat actions).",
+        Default = false,
+        ConfigType = "Advanced",
+    },
+    -- Recovery/Thresholds
+    -- Heal scan gate is the max of configured heal thresholds (see Class:GetHealScanThreshold).
+    ['LightHealPoint']             = {
+        DisplayName = "Light Heal Point",
+        Group = "Abilities",
+        Header = "Recovery",
+        Category = "Healing Thresholds",
+        Index = 2,
+        Tooltip = "Minimum PctHPs to use the Light Heal Rotation or actions that check whether Light Heals are needed.",
+        Default = function() return Globals.CurLoadedClass == "CLR" and 95 or 90 end,
+        Min = 1,
+        Max = 99,
+        ConfigType = "Advanced",
+        ShowCond = function(peer) return not Config:UsesClassHealPcts(peer) end,
+    },
+    ['MainHealPoint']              = {
+        DisplayName = "Main Heal Point",
+        Group = "Abilities",
+        Header = "Recovery",
+        Category = "Healing Thresholds",
+        Index = 3,
+        Tooltip = "Minimum PctHPs to use the Main Heal Rotation or actions that check whether Main Heals are needed.",
+        Default = 80,
+        Min = 1,
+        Max = 100,
+        ConfigType = "Advanced",
+        ShowCond = function(peer) return not Config:UsesClassHealPcts(peer) end,
+    },
+    ['BigHealPoint']               = {
+        DisplayName = "Big Heal Point",
+        Group = "Abilities",
+        Header = "Recovery",
+        Category = "Healing Thresholds",
+        Index = 4,
+        Tooltip = "Minimum PctHPs to use the Big Heal Rotation or actions that check whether BigHeals are needed.",
+        Default = 50,
+        Min = 1,
+        Max = 100,
+        ConfigType = "Advanced",
+        ShowCond = function(peer) return not Config:UsesClassHealPcts(peer) end,
+    },
+    ['GroupHealPoint']             = {
+        DisplayName = "Group Heal Point",
+        Group = "Abilities",
+        Header = "Recovery",
+        Category = "Healing Thresholds",
+        Index = 5,
+        Tooltip = "Minimum PctHPs to use the Group Heal Rotation or actions that check whether Group Heals are needed.",
+        Default = 80,
+        Min = 1,
+        Max = 100,
+        ConfigType = "Advanced",
+        ShowCond = function(peer) return not Config:UsesClassHealPcts(peer) end,
+    },
+    ['GroupInjureCnt']             = {
+        DisplayName = "Group Injured Count",
+        Group = "Abilities",
+        Header = "Recovery",
+        Category = "Healing Thresholds",
+        Index = 6,
+        Tooltip = "Number of group members that must be under the group-heal threshold. With Class Heal settings this uses Class Heal: Group HoT / Group Regular Heal; otherwise Group Heal Point.",
+        Default = 3,
+        Min = 1,
+        Max = 5,
+        ConfigType = "Advanced",
+    },
+    ['TankPriorityThreshold']      = {
+        DisplayName = "Tank Priority Threshold",
+        Group = "Abilities",
+        Header = "Recovery",
+        Category = "Healing Thresholds",
+        Index = 7,
+        Tooltip =
+            "When choosing whom to heal in group, prefer a tanking member below this PctHPs over a lower-HP non-tank.\n" ..
+            "Independent of Main Heal Point / Class Heal %%. 0 = no tank priority (always pick the lowest HP candidate).",
+        Default = 50,
+        Min = 0,
+        Max = 100,
+        ConfigType = "Advanced",
+    },
+    ['PetHealPoint']               = {
+        DisplayName = "Pet Heal Point",
+        Group = "Abilities",
+        Header = "Recovery",
+        Category = "Healing Thresholds",
+        Index = 8,
+        Tooltip = "Minimum PctHPs to process standard PC Healing Rotations on pets (if enabled). See 'Heal Pets as PCs' setting.",
+        Default = 50,
+        Min = 1,
+        Max = 100,
+        ConfigType = "Advanced",
+    },
+    ['HealPriorityPoint']          = {
+        DisplayName = "Heal Priority Point",
+        Group = "Abilities",
+        Header = "Recovery",
+        Category = "Healing Thresholds",
+        Index = 9,
+        Tooltip = "Yield offensive rotations if anyone we heal is below this PctHPs. 0 = never yield for healing.",
+        Default = 80,
+        Min = 0,
+        Max = 100,
+        ConfigType = "Advanced",
+    },
+    --Recovery/Curing
+    ['DoCures']                    = {
+        DisplayName = "Do Cures",
+        Group = "Abilities",
+        Header = "Recovery",
+        Category = "Curing",
+        Index = 1,
+        Tooltip = "Clear curable detrimental effects from yourself and your peers.",
+        Default = true,
+    },
+    ['ActorCureScope']             = {
+        DisplayName = "Cure Scope",
+        Group = "Abilities",
+        Header = "Recovery",
+        Category = "Curing",
+        Index = 2,
+        Tooltip = "Choose whose detrimental effects to cure. Targets other than yourself must be RGMercs Peers (refer to the Peers FAQ).",
+        Default = 2,
+        Min = 1,
+        Max = 3,
+        Type = "Combo",
+        ComboOptions = { 'Self', 'Group', 'Group + Heal List', },
+    },
+    ['DowntimeDetDispel']          = {
+        DisplayName = "Downtime Det Dispel",
+        Group = "Abilities",
+        Header = "Recovery",
+        Category = "Curing",
+        Index = 3,
+        Tooltip =
+            "When to use clear/detrimental dispel abilities (like Radiant Cure) outside of combat:\n" ..
+            "Never: save them for combat.\n" ..
+            "Cure List: only effects on your cure list.\n" ..
+            "Always: clear whenever something is curable.\n" ..
+            "Mez is always cleared, regardless of this setting.",
+        Default = 2,
+        Min = 1,
+        Max = 3,
+        Type = "Combo",
+        ComboOptions = { 'Never', 'Cure List', 'Always', },
+    },
+    ['CureInterval']               = {
+        DisplayName = "Downtime Cure Check Interval",
+        Group = "Abilities",
+        Header = "Recovery",
+        Category = "Curing",
+        Index = 4,
+        Tooltip = "The delay in seconds between making cure checks during downtime (to prevent unnecessary queries).",
+        Default = 5,
+        Min = 1,
+        Max = 30,
+        ConfigType = "Advanced",
+    },
+    ['StaggerGroupAACures']        = {
+        DisplayName = "Stagger Group AA Cures",
+        Group = "Abilities",
+        Header = "Recovery",
+        Category = "Curing",
+        Index = 5,
+        Tooltip =
+            "If you detect an RGMercs Peer already casting a group clear (e.g. Radiant Cure or Group Purify Soul) on a groupmate, do not check if cures are needed until they are finished.\n" ..
+            "This is a 'best-effort' setting that tries to avoid multiple healers using group AA cures at once on the same effect. It does not check for other spells. It is not foolproof.",
+        Default = true,
+        ConfigType = "Advanced",
+    },
+    ['CureAllowList']              = {
+        DisplayName = "Cure Allow List",
+        Type = "Custom",
+        Default = {},
+    },
+    ['CureDenyList']               = {
+        DisplayName = "Cure Deny List",
+        Type = "Custom",
+        Default = {},
+    },
+    ['CureAllowListShared']        = {
+        DisplayName = "Shared Cure Allow List",
+        Type = "Custom",
+        Default = {},
+        Scope = "server",
+    },
+    ['CureDenyListShared']         = {
+        DisplayName = "Shared Cure Deny List",
+        Type = "Custom",
+        Default = {},
+        Scope = "server",
+    },
+    ['UseSharedCureLists']         = {
+        DisplayName = "Use Shared Cure Lists",
+        Type = "Custom",
+        Default = true,
+    },
+
+    --Recovery/Rezzing
+    ['DoRez']                      = {
+        DisplayName = "Do Rez",
+        Group = "Abilities",
+        Header = "Recovery",
+        Category = "Rezzing",
+        Index = 1,
+        Tooltip = "Use Rezes. If disabled, no rez spells will be used at any time.",
+        Default = true,
+    },
+    ['DoBattleRez']                = {
+        DisplayName = "Do Battle Rez",
+        Group = "Abilities",
+        Header = "Recovery",
+        Category = "Rezzing",
+        Index = 2,
+        Tooltip = "Enable rezzing while in combat",
+        Default = true,
+    },
+    ['RezOutside']                 = {
+        DisplayName = "Rez Outside",
+        Group = "Abilities",
+        Header = "Recovery",
+        Category = "Rezzing",
+        Index = 3,
+        Tooltip = "Rez dannet peers, raid/guildmates, and anyone in the Assist List (and not simply your own group).",
+        Default = true,
+        ConfigType = "Advanced",
+    },
+    ['RetryRezDelay']              = {
+        DisplayName = "Retry Rez Delay",
+        Group = "Abilities",
+        Header = "Recovery",
+        Category = "Rezzing",
+        Index = 4,
+        Tooltip = "Delay in seconds between rez attempts.",
+        Default = 6,
+        Min = 1,
+        Max = 60,
+        ConfigType = "Advanced",
+    },
+    ['RezInZonePC']                = {
+        DisplayName = "Rez In-Zone PCs",
+        Group = "Abilities",
+        Header = "Recovery",
+        Category = "Rezzing",
+        Index = 5,
+        Tooltip = "Rez corpses of live PCs in the zone (If disabled, we will only rez corpses of PCs not in our current zone).Note that we will not rez in-zone PCs during combat.",
+        Default = Globals.ServerEnv:lower() == "live",
+        ConfigType = "Advanced",
+        FAQ = "Why would I want (or not want) to rez corpses of PCs that are in-zone with us already?",
+        Answer = "Emu servers have various rules, such as no xp loss on death, or not dropping items to your corpse\n" ..
+            "Depending in the server, various combinations of rez settings may be required for the best play experience.",
+    },
+    ['ConCorpseForRez']            = {
+        DisplayName = "Check for Previous Rez",
+        Group = "Abilities",
+        Header = "Recovery",
+        Category = "Rezzing",
+        Index = 6,
+        Tooltip = "If this setting is enabled, we will attempt to con a corpse and rez only if that corpse has not yet taken one.",
+        Default = Globals.ServerEnv:lower() ~= "live",
+        ConfigType = "Advanced",
+        FAQ = "Why am I conning corpses? I play on a server with no exp penalty, or where we don't need to loot corpses.",
+        Answer = "The Check for Previous Rez setting is enabled by default on emu, this can be adjusted in the Rezzing options.",
+    },
+    ['RezRolePriority']            = {
+        DisplayName = "Rez Role Priority",
+        Group = "Abilities",
+        Header = "Recovery",
+        Category = "Rezzing",
+        Index = 7,
+        Tooltip = "Rez the selected roles (healers and/or tanks) before other corpses; distance breaks ties. None uses plain nearest-first order.",
+        Type = "Combo",
+        ComboOptions = { 'None', 'Healers Only', 'Tanks Only', 'Both', },
+        Default = 4,
+        Min = 1,
+        Max = 4,
+    },
+
+    -- Burning
+    ['BurnAuto']                   = {
+        DisplayName = "Use Auto Burn",
+        Group = "Combat",
+        Header = "Burning",
+        Category = "Burning",
+        Index = 1,
+        Tooltip = "Use Burn rotations when the conditions below are met.",
+        Default = true,
+        ConfigType = "Normal",
+    },
+    ['BurnAlways']                 = {
+        DisplayName = "Auto Burn: Always",
+        Group = "Combat",
+        Header = "Burning",
+        Category = "Burning",
+        Index = 2,
+        Tooltip = "Automatically use Burn rotations on any/every target.",
+        Default = false,
+        ConfigType = "Advanced",
+    },
+    ['BurnMobCount']               = {
+        DisplayName = "Auto Burn: Mob Threshold",
+        Group = "Combat",
+        Header = "Burning",
+        Category = "Burning",
+        Index = 4,
+        Tooltip = "Automatically use Burn rotations when we are fighting x number of haters.",
+        Default = 3,
+        Min = 1,
+        Max = 10,
+        ConfigType = "Advanced",
+    },
+    ['BurnNamed']                  = {
+        DisplayName = "Auto Burn: Named",
+        Group = "Combat",
+        Header = "Burning",
+        Category = "Burning",
+        Index = 5,
+        Tooltip = "Automatically use Burn rotations when we are fighting a named mob (must be present on the RGMercs Spawn List or detected with SpawnMaster or Alert Master).",
+        Default = true,
+        ConfigType = "Advanced",
+    },
+    ['NamedMinLevel']              = {
+        DisplayName = "Named Min Level",
+        Group = "Combat",
+        Header = "Burning",
+        Category = "Burning",
+        Index = 6,
+        Tooltip = "The minimum level we will treat a Named as a threat (if below this level, we will treat them as trash mobs).",
+        Default = 1,
+        Min = 1,
+        Max = 150,
+        ConfigType = "Advanced",
+    },
+    ['NamedMinHPPct']              = {
+        DisplayName = "Named Min HP%",
+        Group = "Combat",
+        Header = "Burning",
+        Category = "Burning",
+        Index = 7,
+        Tooltip = "The minimum HP% a named has to drop to before we'll burn it.",
+        Default = 100,
+        Min = 1,
+        Max = 100,
+        ConfigType = "Advanced",
+    },
+    ['CheckSMForNamed']            = {
+        DisplayName = "Check SM For Named",
+        Group = "Combat",
+        Header = "Burning",
+        Category = "Burning",
+        Index = 8,
+        Tooltip = "Treat your target as 'named' if present on your MQ2SpawnMaster list (uses the SpawnMaster TLO).",
+        Default = true,
+        ConfigType = "Advanced",
+    },
+    ['CheckAMForNamed']            = {
+        DisplayName = "Check AM For Named",
+        Group = "Combat",
+        Header = "Burning",
+        Category = "Burning",
+        Index = 9,
+        Tooltip = "Treat your target as 'named' if present on your Alert Master list (uses the Alert Master TLO).",
+        Default = true,
+        ConfigType = "Advanced",
+    },
+
+
+    -- [ UI ] --
+    ['DisplayManualTarget']              = {
+        DisplayName = "Display Manual Target",
+        Group = "General",
+        Header = "Interface",
+        Category = "Main Panel",
+        Index = 1,
+        Tooltip = "If you have no auto target, enabling this will show information about your current manual target in the UI.",
+        Default = false,
+    },
+    ['HPBarStyle']                       = {
+        DisplayName = "Target HP Bar Style",
+        Group = "General",
+        Header = "Interface",
+        Category = "Main Panel",
+        Index = 2,
+        Tooltip = "The method for coloring the HP display of your manual target (if enabled).",
+        Default = 2,
+        Min = 1,
+        Max = #Globals.Constants.HPBarStyles,
+        Type = "Combo",
+        ComboOptions = Globals.Constants.HPBarStyles,
+    },
+    ['OverrideHP']                       = {
+        DisplayName = "Override HP Display",
+        Group = "General",
+        Header = "Interface",
+        Category = "Main Panel",
+        Type = "Custom",
+        Index = 0,
+        Tooltip = "If you have no auto target, enabling this will show information about your current manual target in the UI.",
+        Default = 0,
+        Min = 0,
+        Max = 100,
+    },
+    ['AlwaysShowMiniButton']             = {
+        DisplayName = "Always Show Mini Button",
+        Group = "General",
+        Header = "Interface",
+        Category = "Main Panel",
+        Index = 3,
+        Tooltip = "Always show the RGMercs Mini Mode button, even when the main window is displayed.",
+        Default = false,
+        ConfigType = "Normal",
+    },
+    ['EscapeMinimizes']                  = {
+        DisplayName = "Escape Closes Main Window",
+        Group = "General",
+        Header = "Interface",
+        Category = "Main Panel",
+        Index = 4,
+        Tooltip = "In always-show mini button mode, closes the main window with escape if enabled.",
+        Default = false,
+        ConfigType = "Normal",
+    },
+    ['ShowDebugTiming']                  = {
+        DisplayName = "Show Rotation Debug Timing",
+        Group = "General",
+        Header = "Interface",
+        Category = "Main Panel",
+        Index = 5,
+        ConfigType = "Advanced",
+        Tooltip = "Enable displaying the timing of each rotation step.",
+        Default = false,
+    },
+    ['BgOpacity']                        = {
+        DisplayName = "Background Opacity",
+        Group = "General",
+        Header = "Interface",
+        Category = "Interface",
+        Index = 6,
+        Tooltip = "Opacity for the RGMercs UI",
+        Default = 100,
+        Min = 20,
+        Max = 100,
+    },
+    ['SavePositionPerCharacter']         = {
+        DisplayName = "Save Window Position per Char",
+        Group = "General",
+        Header = "Interface",
+        Category = "Interface",
+        Index = 6,
+        Tooltip = "Save window positions separately for each character.",
+        Default = false,
+    },
+    ['FrameEdgeRounding']                = {
+        DisplayName = "Frame Edge Rounding",
+        Group = "General",
+        Header = "Interface",
+        Category = "Interface",
+        Index = 7,
+        Tooltip = "Frame Edge Rounding for the RGMercs UI",
+        Default = 6,
+        Min = 0,
+        Max = 50,
+    },
+    ['ScrollBarRounding']                = {
+        DisplayName = "Scroll Bar Rounding",
+        Group = "General",
+        Header = "Interface",
+        Category = "Interface",
+        Index = 8,
+        Tooltip = "Frame Edge Rounding for the RGMercs UI",
+        Default = 10,
+        Min = 0,
+        Max = 50,
+    },
+    ['WarnCombatPaused']                 = {
+        DisplayName = "Warn on Combat While Paused",
+        Group = "General",
+        Header = "Interface",
+        Category = "Main Panel",
+        Index = 9,
+        Tooltip = "If we gain aggro while paused, display a warning in the chat window.",
+        Default = true,
+    },
+    ['ShowFTControls']                   = {
+        DisplayName = "Show ForceTarget Controls",
+        Group = "General",
+        Header = "Interface",
+        Category = "ForceTarget Window",
+        Index = 10,
+        Tooltip = "Show ForceTarget controls to clear/set forced targets.",
+        Default = true, -- defaulted to false just to annoy Algar -- returned to true by Algar only out of spite
+    },
+    ['FTHPOverlay']                      = {
+        DisplayName = "HP % Overlay for ForceTarget Window",
+        Group = "General",
+        Header = "Interface",
+        Category = "ForceTarget Window",
+        Index = 11,
+        Tooltip = "Show a HP bar overlay on your forced target (if enabled)",
+        Default = false,
+    },
+    ['FTHPOverlayAlpha']                 = {
+        DisplayName = "Not Targeted HP % Overlay Alpha",
+        Group = "General",
+        Header = "Interface",
+        Category = "ForceTarget Window",
+        Index = 12,
+        Tooltip = "Opacity for the HP bar overlay on your forced target (if enabled) for non-targeted mobs",
+        Default = 30,
+        Min = 0,
+        Max = 100,
+    },
+    ['FTUseBars']                        = {
+        DisplayName = "Progress Bars in Force Target Window",
+        Group = "General",
+        Header = "Interface",
+        Category = "ForceTarget Window",
+        Index = 13,
+        Tooltip = "Use bars to display HP and other info in the Force Target Window instead of text.",
+        Default = false,
+    },
+    ['FTRollTargetName']                 = {
+        DisplayName = "Roll Target Name Color",
+        Group = "General",
+        Header = "Interface",
+        Category = "ForceTarget Window",
+        Index = 13,
+        Tooltip = "Roll colors for target names in the Force Target Window based on Con.",
+        Default = true,
+    },
+    ['StatusUseBars']                    = {
+        DisplayName = "Progress Bars in MercsStatus Window",
+        Group = "General",
+        Header = "Interface",
+        Category = "Mercs Status Window",
+        Index = 14,
+        Tooltip = "Use bars to display HP and other info in the Mercs Status Window instead of text.",
+        Default = false,
+    },
+    ['StatusLeftClickAction']            = {
+        DisplayName = "Mercs Status Left-Click Action",
+        Group = "General",
+        Header = "Interface",
+        Category = "Mercs Status Window",
+        Index = 15,
+        Tooltip = "Action to perform when left-clicking a name in the Mercs Status Window",
+        Type = "Combo",
+        ComboOptions = { 'Target', 'Switch To', 'Do Nothing', },
+        Default = 1,
+        Min = 1,
+        Max = 3,
+        ConfigType = "Advanced",
+    },
+    ['StatusLeftClickCursorClickAction'] = {
+        DisplayName = "Mercs Status Cursor+Left-Click Action",
+        Group = "General",
+        Header = "Interface",
+        Category = "Mercs Status Window",
+        Index = 16,
+        Tooltip = "Action to perform when left-clicking a name in the Mercs Status Window while having an item on your cursor.",
+        Type = "Combo",
+        ComboOptions = { 'Trade', 'Ignore Cursor Item', },
+        Default = 1,
+        Min = 1,
+        Max = 2,
+        ConfigType = "Advanced",
+    },
+    ['StatusRightClickAction']           = {
+        DisplayName = "Mercs Status Right-Click Action",
+        Group = "General",
+        Header = "Interface",
+        Category = "Mercs Status Window",
+        Index = 17,
+        Tooltip = "Action to perform when right-clicking a name in the Mercs Status Window",
+        Type = "Combo",
+        ComboOptions = { 'Target', 'Switch To', 'Do Nothing', },
+        Default = 2,
+        Min = 1,
+        Max = 3,
+        ConfigType = "Advanced",
+    },
+    ['ActorPeerTimeout']                 = {
+        DisplayName = "Actor Peer Timeout",
+        Group = "General",
+        Header = "Interface",
+        Category = "Mercs Status Window",
+        Index = 18,
+        Tooltip = "Time in seconds to wait before considering a peer disconnected.",
+        Default = 45,
+        Min = 10,
+        Max = 120,
+        ConfigType = "Advanced",
+    },
+    ['PopoutWindowsLockWithMain']        = {
+        DisplayName = "Lock Popout Windows with Main",
+        Group = "General",
+        Header = "Interface",
+        Category = "Interface",
+        Index = 19,
+        Tooltip = "Popout windows will lock/unlock when the main window is locked/unlocked.",
+        Default = true,
+    },
+    ['EnableAAOverlay']                  = {
+        DisplayName = "Enable AA Overlay",
+        Group = "General",
+        Header = "Interface",
+        Category = "Interface",
+        Index = 20,
+        Tooltip = "Show an overlay on the AA window that tells you which AAs are used by RGMercs rotations.",
+        Default = true,
+    },
+    ['DisableToggleButtonPulse']         = {
+        DisplayName = "Disable Toggle Button Pulse",
+        Group = "General",
+        Header = "Interface",
+        Category = "Interface",
+        Index = 21,
+        Tooltip = "Disable the pulsing effect toggle buttons.",
+        Default = false,
+    },
+    ['EnableAnimatedTooltips']           = {
+        DisplayName = "Enable Animated Tooltips",
+        Group = "General",
+        Header = "Interface",
+        Category = "Interface",
+        Index = 22,
+        Tooltip = "Enable animated tooltips (fade in/out). Disabling this will make tooltips appear/disappear instantly.",
+        Default = true,
+    },
+    ['FontScale']                        = {
+        DisplayName = "Font Scale %",
+        Group = "General",
+        Header = "Interface",
+        Category = "Interface",
+        Index = 23,
+        Tooltip = "Scale for all fonts used in the UI.",
+        Default = 0,
+        Min = 0,
+        Max = 100,
+    },
+    ['ShowTargetWindow']                 = {
+        DisplayName = "Show Target Window",
+        Group = "General",
+        Header = "Interface",
+        Category = "Mercs Target Window",
+        Index = 1,
+        Tooltip = "Display an RGMercs-style fancy target window with information about your current target.",
+        Default = false,
+    },
+    ['TargetBuffNameTooltip']            = {
+        DisplayName = "Show Target Buff Name Tooltips",
+        Group = "General",
+        Header = "Interface",
+        Category = "Mercs Target Window",
+        Index = 2,
+        Tooltip = "Display tooltips with the names of buffs on your target.",
+        Default = true,
+    },
+    ['TargetBuffCasterTooltip']          = {
+        DisplayName = "Show Target Buff Caster Tooltips",
+        Group = "General",
+        Header = "Interface",
+        Category = "Mercs Target Window",
+        Index = 2,
+        Tooltip = "Display tooltips with the casters of buffs on your target.",
+        Default = true,
+    },
+    ['TargetBuffDescriptionTooltip']     = {
+        DisplayName = "Show Target Buff Description Tooltips",
+        Group = "General",
+        Header = "Interface",
+        Category = "Mercs Target Window",
+        Index = 3,
+        Tooltip = "Display tooltips with the descriptions of buffs on your target.",
+        Default = true,
+    },
+    ['TargetBuffIconSize']               = {
+        DisplayName = "Target Buff Icon Size",
+        Group = "General",
+        Header = "Interface",
+        Category = "Mercs Target Window",
+        Index = 4,
+        Tooltip = "Size of the buff icons on the target window.",
+        Default = 24,
+        Min = 12,
+        Max = 64,
+    },
+    ['TargetBuffBlinkAtTime']            = {
+        DisplayName = "Target Buff Blink Time",
+        Group = "General",
+        Header = "Interface",
+        Category = "Mercs Target Window",
+        Index = 5,
+        Tooltip = "Seconds remaining on buff before we blink the icon.",
+        Default = 15,
+        Min = 0,
+        Max = 60,
+    },
+    ['LockTargetWindow']                 = {
+        DisplayName = "Lock Target Window",
+        Group = "General",
+        Header = "Interface",
+        Category = "Mercs Target Window",
+        Index = 5,
+        Tooltip = "Lock the position of the target window.",
+        Default = false,
+    },
+    ['ShowTargetBuffs']                  = {
+        DisplayName = "Show Target Buffs",
+        Group = "General",
+        Header = "Interface",
+        Category = "Mercs Target Window",
+        Index = 6,
+        Tooltip = "Display buffs on the target.",
+        Default = true,
+    },
+    ['ShowTargetOfTarget']               = {
+        DisplayName = "Show Target of Target",
+        Group = "General",
+        Header = "Interface",
+        Category = "Mercs Target Window",
+        Index = 7,
+        Tooltip = "Display the target's current target.",
+        Default = true,
+    },
+    ['ShowTargetSecondaryAggro']         = {
+        DisplayName = "Show Secondary Aggro",
+        Group = "General",
+        Header = "Interface",
+        Category = "Mercs Target Window",
+        Index = 8,
+        Tooltip = "Display the secondary aggro player and percentage.",
+        Default = true,
+    },
+
+    -- [ UI Colors ] --
+    ['MainButtonUnpausedColor']          = {
+        DisplayName = "Main Button Unpaused",
+        Group = "General",
+        Header = "Interface",
+        Category = "Default Colors",
+        Index = 11,
+        Tooltip = "Color used for the main button when RGMercs is unpaused.",
+        Default = Tables.ImVec4ToTable(Globals.Constants.DefaultColors.MainButtonUnpausedColor),
+        Type = "Color",
+        OnChange = function(_, _)
+            Config.CacheCustomColors()
+        end,
+    },
+    ['MainButtonPausedColor']            = {
+        DisplayName = "Main Button Paused",
+        Group = "General",
+        Header = "Interface",
+        Category = "Default Colors",
+        Index = 12,
+        Tooltip = "Color used for the main button when RGMercs is paused.",
+        Default = Tables.ImVec4ToTable(Globals.Constants.DefaultColors.MainButtonPausedColor),
+        Type = "Color",
+        OnChange = function(_, _)
+            Config.CacheCustomColors()
+        end,
+    },
+    ['HPHighColor']                      = {
+        DisplayName = "HP High",
+        Group = "General",
+        Header = "Interface",
+        Category = "Default Colors",
+        Index = 13,
+        Tooltip = "Color used to display high HP values.",
+        Default = Tables.ImVec4ToTable(Globals.Constants.DefaultColors.HPHighColor),
+        Type = "Color",
+        OnChange = function(_, _)
+            Config.CacheCustomColors()
+        end,
+    },
+    ['HPLowColor']                       = {
+        DisplayName = "HP Low",
+        Group = "General",
+        Header = "Interface",
+        Category = "Default Colors",
+        Index = 15,
+        Tooltip = "Color used to display low HP values.",
+        Default = Tables.ImVec4ToTable(Globals.Constants.DefaultColors.HPLowColor),
+        Type = "Color",
+        OnChange = function(_, _)
+            Config.CacheCustomColors()
+        end,
+    },
+    ['ManaHighColor']                    = {
+        DisplayName = "Mana High",
+        Group = "General",
+        Header = "Interface",
+        Category = "Default Colors",
+        Index = 16,
+        Tooltip = "Color used to display high Mana values.",
+        Default = Tables.ImVec4ToTable(Globals.Constants.DefaultColors.ManaHighColor),
+        Type = "Color",
+        OnChange = function(_, _)
+            Config.CacheCustomColors()
+        end,
+    },
+    ['ManaLowColor']                     = {
+        DisplayName = "Mana Low",
+        Group = "General",
+        Header = "Interface",
+        Category = "Default Colors",
+        Index = 18,
+        Tooltip = "Color used to display low Mana values.",
+        Default = Tables.ImVec4ToTable(Globals.Constants.DefaultColors.ManaLowColor),
+        Type = "Color",
+        OnChange = function(_, _)
+            Config.CacheCustomColors()
+        end,
+    },
+    ['ConditionPassColor']               = {
+        DisplayName = "Condition Pass",
+        Group = "General",
+        Header = "Interface",
+        Category = "Default Colors",
+        Index = 19,
+        Tooltip = "Color used to display a passing condition",
+        Default = Tables.ImVec4ToTable(Globals.Constants.DefaultColors.ConditionPassColor),
+        Type = "Color",
+        OnChange = function(_, _)
+            Config.CacheCustomColors()
+        end,
+    },
+    ['ConditionMidColor']                = {
+        DisplayName = "Condition Mid (between pass/fail)",
+        Group = "General",
+        Header = "Interface",
+        Category = "Default Colors",
+        Index = 20,
+        Tooltip = "Color used to display an unevaluated condition",
+        Default = Tables.ImVec4ToTable(Globals.Constants.DefaultColors.ConditionMidColor),
+        Type = "Color",
+        OnChange = function(_, _)
+            Config.CacheCustomColors()
+        end,
+    },
+    ['ConditionFailColor']               = {
+        DisplayName = "Condition Fail",
+        Group = "General",
+        Header = "Interface",
+        Category = "Default Colors",
+        Index = 21,
+        Tooltip = "Color used to display a failing condition",
+        Default = Tables.ImVec4ToTable(Globals.Constants.DefaultColors.ConditionFailColor),
+        Type = "Color",
+        OnChange = function(_, _)
+            Config.CacheCustomColors()
+        end,
+    },
+    ['ConditionDisabledColor']           = {
+        DisplayName = "Condition Disabled",
+        Group = "General",
+        Header = "Interface",
+        Category = "Default Colors",
+        Index = 22,
+        Tooltip = "Color used to display a disabled condition",
+        Default = Tables.ImVec4ToTable(Globals.Constants.DefaultColors.ConditionDisabledColor),
+        Type = "Color",
+        OnChange = function(_, _)
+            Config.CacheCustomColors()
+        end,
+    },
+    ['MainCombatColor']                  = {
+        DisplayName = "Combat",
+        Group = "General",
+        Header = "Interface",
+        Category = "Default Colors",
+        Index = 23,
+        Tooltip = "Color used for the UI elements when in combat.",
+        Default = Tables.ImVec4ToTable(Globals.Constants.DefaultColors.MainCombatColor),
+        Type = "Color",
+        OnChange = function(_, _)
+            Config.CacheCustomColors()
+        end,
+    },
+    ['MainDowntimeColor']                = {
+        DisplayName = "Downtime",
+        Group = "General",
+        Header = "Interface",
+        Category = "Default Colors",
+        Index = 24,
+        Tooltip = "Color used for the main window border when out of combat.",
+        Default = Tables.ImVec4ToTable(Globals.Constants.DefaultColors.MainDowntimeColor),
+        Type = "Color",
+        OnChange = function(_, _)
+            Config.CacheCustomColors()
+        end,
+    },
+    ['SearchHighlightColor']             = {
+        DisplayName = "Search Highlight",
+        Group = "General",
+        Header = "Interface",
+        Category = "Default Colors",
+        Index = 19,
+        Tooltip = "Color used to highlight search terms in various windows.",
+        Default = Tables.ImVec4ToTable(Globals.Constants.DefaultColors.SearchHighlightColor),
+        Type = "Color",
+        OnChange = function(_, _)
+            Config.CacheCustomColors()
+        end,
+    },
+    ['AssistSpawnFarColor']              = {
+        DisplayName = "Assist Spawn Text If Far",
+        Group = "General",
+        Header = "Interface",
+        Category = "Default Colors",
+        Index = 21,
+        Tooltip = "Color used to display an assist spawn that is far from us.",
+        Default = Tables.ImVec4ToTable(Globals.Constants.DefaultColors.AssistSpawnFarColor),
+        Type = "Color",
+        OnChange = function(_, _)
+            Config.CacheCustomColors()
+        end,
+    },
+    ['BurnFlashColorOne']                = {
+        DisplayName = "Burn Burn Flash Color One",
+        Group = "General",
+        Header = "Interface",
+        Category = "Default Colors",
+        Index = 22,
+        Tooltip = "First of two colors to use when flashing burn status message.",
+        Default = Tables.ImVec4ToTable(Globals.Constants.DefaultColors.BurnFlashColorOne),
+        Type = "Color",
+        OnChange = function(_, _)
+            Config.CacheCustomColors()
+        end,
+    },
+    ['BurnFlashColorTwo']                = {
+        DisplayName = "Burn Burn Flash Color Two",
+        Group = "General",
+        Header = "Interface",
+        Category = "Default Colors",
+        Index = 23,
+        Tooltip = "Second of two colors to use when flashing burn status message.",
+        Default = Tables.ImVec4ToTable(Globals.Constants.DefaultColors.BurnFlashColorTwo),
+        Type = "Color",
+        OnChange = function(_, _)
+            Config.CacheCustomColors()
+        end,
+    },
+    ['FTHighlight']                      = {
+        DisplayName = "ForceTarget Highlight",
+        Group = "General",
+        Header = "Interface",
+        Category = "Default Colors",
+        Index = 24,
+        Tooltip = "Force Target Highlight border in the Force Target Window.",
+        Default = Tables.ImVec4ToTable(Globals.Constants.DefaultColors.FTHighlight),
+        Type = "Color",
+        OnChange = function(_, _)
+            Config.CacheCustomColors()
+        end,
+    },
+    ['CharmReasonColor']                 = {
+        DisplayName = "Charm Immune Reason Text",
+        Group = "General",
+        Header = "Interface",
+        Category = "Default Colors",
+        Index = 25,
+        Tooltip = "Color used to display the reason we cannot charm a target.",
+        Default = Tables.ImVec4ToTable(Globals.Constants.DefaultColors.CharmReasonColor),
+        Type = "Color",
+        OnChange = function(_, _)
+            Config.CacheCustomColors()
+        end,
+    },
+    ['FAQCmdQuestionColor']              = {
+        DisplayName = "FAQ Command / Question Text",
+        Group = "General",
+        Header = "Interface",
+        Category = "Default Colors",
+        Index = 26,
+        Tooltip = "Color used to display commands in the FAQ section of the Help Window.",
+        Default = Tables.ImVec4ToTable(Globals.Constants.DefaultColors.FAQCmdQuestionColor),
+        Type = "Color",
+        OnChange = function(_, _)
+            Config.CacheCustomColors()
+        end,
+    },
+    ['FAQUsageAnswerColor']              = {
+        DisplayName = "FAQ Usage / Answer Text",
+        Group = "General",
+        Header = "Interface",
+        Category = "Default Colors",
+        Index = 27,
+        Tooltip = "Color used to display usage and answer text in the FAQ section of the Help Window.",
+        Default = Tables.ImVec4ToTable(Globals.Constants.DefaultColors.FAQUsageAnswerColor),
+        Type = "Color",
+        OnChange = function(_, _)
+            Config.CacheCustomColors()
+        end,
+    },
+    ['FAQDescColor']                     = {
+        DisplayName = "FAQ Description Text",
+        Group = "General",
+        Header = "Interface",
+        Category = "Default Colors",
+        Index = 28,
+        Tooltip = "Color used to display description text in the FAQ section of the Help Window.",
+        Default = Tables.ImVec4ToTable(Globals.Constants.DefaultColors.FAQDescColor),
+        Type = "Color",
+        OnChange = function(_, _)
+            Config.CacheCustomColors()
+        end,
+    },
+    ['FAQLinkColor']                     = {
+        DisplayName = "FAQ Link Text",
+        Group = "General",
+        Header = "Interface",
+        Category = "Default Colors",
+        Index = 29,
+        Tooltip = "Color used to display link text in the FAQ section of the Help Window.",
+        Default = Tables.ImVec4ToTable(Globals.Constants.DefaultColors.FAQLinkColor),
+        Type = "Color",
+        OnChange = function(_, _)
+            Config.CacheCustomColors()
+        end,
+    },
+    ['TogglePulseColor']                 = {
+        DisplayName = "Toggle Button Pulse",
+        Group = "General",
+        Header = "Interface",
+        Category = "Default Colors",
+        Index = 30,
+        Tooltip = "Color used for the pulsing effect on toggle buttons (if enabled).",
+        Default = Tables.ImVec4ToTable(Globals.Constants.DefaultColors.TogglePulseColor),
+        Type = "Color",
+        OnChange = function(_, _)
+            Config.CacheCustomColors()
+        end,
+    },
+    ['TooltipTextColor']                 = {
+        DisplayName = "Tooltip Text Color",
+        Group = "General",
+        Header = "Interface",
+        Category = "Default Colors",
+        Index = 31,
+        Tooltip = "Color used for text in tooltips.",
+        Default = Tables.ImVec4ToTable(Globals.Constants.DefaultColors.TooltipTextColor),
+        Type = "Color",
+        OnChange = function(_, _)
+            Config.CacheCustomColors()
+        end,
+    },
+
+    ['DisableClassTheme']                = {
+        DisplayName = "Disable Class Themes",
+        Group = "General",
+        Header = "Interface",
+        Category = "User Theme",
+        Index = 39,
+        Tooltip = "Disable class themes and use the default ImGui style.",
+        Default = false,
+        Type = "Custom",
+    },
+    ['UserThemeOverrideClassTheme']      = {
+        DisplayName = "Override Class Theme",
+        Group = "General",
+        Header = "Interface",
+        Category = "User Theme",
+        Index = 40,
+        Tooltip = "User the user theme even if a class theme is defined.",
+        Default = true,
+        Type = "Custom",
+    },
+    ['UserTheme']                        = {
+        DisplayName = "User Theme",
+        Group = "General",
+        Header = "Interface",
+        Category = "User Theme",
+        Index = 41,
+        Tooltip = "Override any ImGui style settings with a custom theme.",
+        Default = {},
+        Type = "Custom",
+    },
+
+    -- [Internals] --
+    ['LogLevel']                         = {
+        DisplayName = "Log Level",
+        Category = "Internals",
+        Type = "Combo",
+        ComboOptions = Globals.Constants.LogLevels,
+        Default = 3,
+        Min = 1,
+        Max = #Globals.Constants.LogLevels,
+        OnChange = function(_, newValue)
+            Logger.set_log_level(newValue)
+        end,
+    },
+    ['LogFilter']                        = {
+        DisplayName = "Log Filter",
+        Category = "Internals",
+        Default = "",
+        OnChange = function(_, newValue)
+            if newValue:len() == 0 then
+                Logger.clear_log_filter()
+            else
+                Logger.set_log_filter(newValue)
+            end
+        end,
+    },
+    ['ToastLevel']                       = {
+        DisplayName = "Toast Level",
+        Category = "Internals",
+        Type = "Combo",
+        ComboOptions = Globals.Constants.ToastLevels,
+        Default = 3,
+        Min = 1,
+        Max = #Globals.Constants.ToastLevels,
+        OnChange = function(_, newValue)
+            Logger.set_toast_level(newValue - 1)
+        end,
+    },
+    ['PeerToastLevel']                   = {
+        DisplayName = "Peer Toast Level",
+        Category = "Internals",
+        Type = "Combo",
+        ComboOptions = Globals.Constants.ToastLevels,
+        Tooltip = "Show toasts generated by your RGMercs Peers (see the Peers FAQ).",
+        Default = 3,
+        Min = 1,
+        Max = #Globals.Constants.ToastLevels,
+    },
+    ['EnableLogTracer']                  = {
+        DisplayName = "Enable Debug Tracer",
+        Category = "Internals",
+        Default = true,
+        Tooltip = "Enables the debug tracer to show file/function/line information for each log entry",
+        OnChange = function(_, newValue)
+            Logger.set_debug_tracer_enabled(newValue)
+        end,
+    },
+    ['LogToFile']                        = {
+        DisplayName = "Log To File",
+        Category = "Internals",
+        --Type = "Custom",
+        Default = false,
+        OnChange = function(_, newValue)
+            Logger.set_log_to_file(newValue)
+        end,
+    },
+    ['LogTimeStampsToConsole']           = {
+        DisplayName = "Log Timestamps To RGMercs Console",
+        Category = "Internals",
+        --Type = "Custom",
+        Default = false,
+        OnChange = function(_, newValue)
+            Logger.set_log_timestamps_to_console(newValue)
+        end,
+    },
+    ['EnableDebugging']                  = {
+        DisplayName = "Enable Debugging",
+        Category = "Internals",
+        Index = 0,
+        Tooltip = "Enable the Debug Panel",
+        Default = false,
+    },
+    ['RunSelfTestsOnStartup']            = {
+        DisplayName = "Run Self-Tests on Startup",
+        Category = "Internals",
+        Index = 1,
+        Tooltip = "Run a series of self-tests to check the functionality of various components of the script when it starts up. This may increase startup time.",
+        Default = false,
+        ConfigType = "Advanced",
+    },
+    ['DrawTooltipDebugBox']              = {
+        DisplayName = "Draw Tooltip Debug Box",
+        Category = "Internals",
+        Index = 2,
+        Tooltip = "Draw a box around the tooltip to help identify its boundaries for debugging purposes.",
+        Default = false,
+        ConfigType = "Advanced",
+    },
+    ['LootModuleType']                   = {
+        DisplayName = "Loot Module Type",
+        Group = "General",
+        Header = "Loot(Emu)",
+        Category = "Looting Script",
+        Index = 10,
+        Tooltip = "Choose which loot module to use.",
+        Default = 1,
+        Min = 1,
+        Max = #Globals.Constants.LootModuleTypes,
+        Type = "Combo",
+        ComboOptions = Globals.Constants.LootModuleTypes,
+        OnChange = function(oldValue, newValue)
+            if Globals.BuildType:lower() ~= "emu" and newValue > 1 then
+                Logger.log_error("\ayLoot Modules are not used on offical servers.")
+                Config:SetSetting("LootModuleType", 1, false)
+                return
+            end
+            local oldLootModule = Globals.Constants.LootModuleTypes[oldValue]
+            local newLootModule = Globals.Constants.LootModuleTypes[newValue]
+            Logger.log_info("\ayLoot Module changed from %s to: \ag%s", oldLootModule or "Unknown", newLootModule or "Unknown")
+            Modules:unloadModule(oldLootModule)
+            Config:ClearModuleSettings(oldLootModule)
+            if newValue > 1 then
+                local path = string.format("modules." .. newLootModule:lower())
+                Logger.log_info("\ayLoot Module: \ag%s", newLootModule:lower() or "Unknown")
+                Modules:loadModule(newLootModule, path)
+                Config:UpdateCommandHandlers()
+            end
+        end,
+    },
+
+    --Tanking
+    ['AETauntCnt']                       = {
+        DisplayName = "AE Taunt Count",
+        Group = "Abilities",
+        Header = "Tanking",
+        Category = "Hate Tools",
+        Index = 111,
+        Tooltip = "Minimum number of haters before using AE Taunt Spells or AA when we have less than 100% aggro on one or more of them in range.",
+        Default = 2,
+        Min = 1,
+        Max = 30,
+    },
+    ['SafeAETaunt']                      = {
+        DisplayName = "AE Taunt Safety Check",
+        Group = "Abilities",
+        Header = "Tanking",
+        Category = "Hate Tools",
+        Index = 112,
+        Tooltip = "Check to ensure there aren't neutral mobs in range we could aggro if AE taunts are used. May result in non-use due to false positives.",
+        Default = false,
+        ConfigType = "Advanced",
+        FAQ = "Can you better explain the AE Taunt Safety Check?",
+        Answer = "If the option is enabled, the script will use various checks to determine if a non-hostile or not-aggroed NPC is present and avoid use of the taunt.\n" ..
+            "Unfortunately, the script currently does not discern whether an NPC is (un)attackable, so at times this may lead to the taunt not being used when it is safe to do so.",
+    },
+
+    --Deprecated/Need Adjusted to Custom/Etc
+    -- DEPRECATED 7/26 - sunset 9/1/26. Replaced by the single 'DoCures' master toggle. Kept hidden (Custom) so custom
+    -- cure configs predating the ['Cure'] table keep gating through their own IsCuring/CureNow. DELETE at sunset.
+    ['DoCureSpells']                     = {
+        DisplayName = "Do Cure Spells",
+        Type = "Custom",
+        Default = true,
+    },
+    ['DoCureAA']                         = {
+        DisplayName = "Do Cure AA",
+        Type = "Custom",
+        Default = true,
+    },
+    -- DEPRECATED 7/26 - sunset 9/1/26. Split into StickDistance/StickArgs (auto-migrated by Config:MigrateStickHow at load);
+    -- non-blank values set mid-session are honored verbatim by DoStick until sunset. DELETE at sunset with MigrateStickHow.
+    ['StickHow']                         = {
+        DisplayName = "Stick How",
+        Type = "Custom",
+        Default = "",
+    },
+    ['FullUI']                           = {
+        DisplayName = "Use Full UI",
+        Group = "General",
+        Header = "Interface",
+        Category = "Interface",
+        Tooltip = "Toggle between Full UI and a Simple UI [Experimental]",
+        Default = true,
+    },
+    ['EnableOptionsUI']                  = {
+        DisplayName = "Enable Options UI",
+        Type = "Custom",
+        Group = "General",
+        Header = "Interface",
+        Category = "Interface",
+        Tooltip = "Show the experimental Options UI window",
+        Default = false,
+    },
+    ['EnableAFUI']                       = {
+        DisplayName = "Enable Very Fun UI",
+        Group = "General",
+        Header = "Interface",
+        Category = "Interface",
+        Tooltip = "???",
+        Default = false,
+    },
+    ['ForceAFUIOff']                     = {
+        DisplayName = "Force Very Fun UI Off",
+        Group = "General",
+        Header = "Interface",
+        Category = "Interface",
+        Tooltip = "???",
+        Type = "Custom",
+        Default = false,
+    },
+    ['123EyesOnMe']                      = {
+        DisplayName = "1,2,3 Eyes On Me",
+        Group = "General",
+        Header = "Interface",
+        Category = "Interface",
+        Tooltip = "Derple Dog Watches You While You Sleep",
+        Default = false,
+    },
+}
+
+Config.CommandHandlers                                   = {}
+
+Config.CachedConfigFileNames                             = {}
+
+function Config.GetConfigFileName(moduleName, returnExisting)
+    if Config.CachedConfigFileNames[moduleName] then
+        return Config.CachedConfigFileNames[moduleName]
+    end
+
+    local schemas = {
+        mq.configDir .. '/rgmercs/PCConfigs/' ..
+        moduleName .. "_" .. Globals.CurServer .. "_" .. Globals.CurLoadedChar .. '.lua',
+        mq.configDir .. '/rgmercs/PCConfigs/' ..
+        moduleName .. "_" .. Globals.CurServerNormalized .. "_" .. Globals.CurLoadedChar .. '.lua',
+        mq.configDir .. '/rgmercs/PCConfigs/' ..
+        moduleName .. "_" .. Globals.CurServerNormalized .. "_" .. Globals.CurLoadedChar .. "_" .. Globals.CurLoadedClass:lower() .. '.lua',
+        string.format("%s/rgmercs/PCConfigs/%s/%s/%s/%s.lua", mq.configDir, Globals.CurServerNormalized, Globals.CurLoadedChar, Globals.CurLoadedClass:lower(),
+            moduleName),
+    }
+
+    local latestSchema = #schemas
+    local latest = schemas[latestSchema]
+    Config.CachedConfigFileNames[moduleName] = latest
+
+    -- If latest exists, delete all older schemas
+    if Files.file_exists(latest) then
+        for i = 1, latestSchema - 1 do
+            if Files.file_exists(schemas[i]) then
+                Logger.log_info("Removing old v%d config for %s module.", i, moduleName)
+                Files.delete_file(schemas[i])
+            end
+        end
+        return latest
+    end
+
+    -- Otherwise find newest existing older schema (from newest to oldest)
+    for i = latestSchema - 1, 1, -1 do
+        if Files.file_exists(schemas[i]) then
+            Logger.log_info("Upgrading config from v%d to v%d for %s module.", i, latestSchema, moduleName)
+
+            if returnExisting == true then
+                return schemas[i]
+            end
+
+            Files.copy_file(schemas[i], latest)
+            return latest
+        end
+    end
+
+    -- Nothing exists, return latest path
+    return latest
+end
+
+-- DEPRECATED 7/26 - sunset 9/1/26. Splits legacy StickHow into StickDistance + StickArgs. DELETE at sunset.
+function Config:MigrateStickHow()
+    local stickHow = Config:GetSetting('StickHow') or ""
+    if stickHow == "" then return end
+
+    local distance = nil
+    local argTokens = {}
+    local lastToken = ""
+    for token in stickHow:gmatch("%S+") do
+        if not distance and lastToken:lower() ~= "id" and (token:match("^%d+$") or token:match("^%d+%%$")) then
+            distance = token
+        else
+            table.insert(argTokens, token)
+        end
+        lastToken = token
+    end
+
+    local migratedArgs = table.concat(argTokens, " ")
+    -- distance-only strings had no flags; bare uw keeps them positionally identical (blank would add role defaults)
+    if migratedArgs == "" and distance then migratedArgs = "uw" end
+
+    Config:SetSetting('StickDistance', distance or "")
+    Config:SetSetting('StickArgs', migratedArgs)
+    Config:SetSetting('StickHow', "")
+    Logger.log_info("\ayStick How has been split: Stick Distance = '\at%s\ay', Stick Arguments = '\at%s\ay'.", distance or "", migratedArgs)
+end
+
+function Config:LoadSettings()
+    -- handle update to db before anything else.
+    if not self:CharacterExistsInDb() then
+        Logger.log_info("\ayCharacter not found in DB, converting settings to DB...")
+        Config:ConvertToDb()
+
+        while Config:DbWritesPending() do
+            Logger.log_debug("Waiting for DB writes to complete before proceeding with initialization...")
+            Config:FlushDB()
+            mq.delay(100)
+        end
+
+        Logger.log_info("\agCharacter DB migration complete!")
+    end
+
+    Logger.log_debug(
+        "\ayLoading Main Settings for %s!",
+        Globals.CurLoadedChar)
+
+    local firstSaveRequired = false
+    local coreModuleName = "Core"
+    local settings = Config:GetAllModuleSettingsFromDb(coreModuleName)
+    local settingsCount = Tables.GetTableSize(settings)
+    if settingsCount == 0 then
+        Logger.log_info("\ayNo settings found in DB for %s, loading defaults.", coreModuleName)
+        firstSaveRequired = true
+    else
+        Logger.log_debug("\agSettings loaded \at%d\ag settings from DB for \ay%s\aw,\ag loading into module.", settingsCount, coreModuleName)
+    end
+
+    Config:RegisterModuleSettings(coreModuleName, settings, Config.DefaultConfig, Config.FAQ, firstSaveRequired)
+
+    Config:MigrateStickHow()
+
+    -- Keep ScriptDir / ScriptName aligned with the actual lua package folder (supports renames like rgmercs-kesh).
+    if Globals.ScriptName == "" or Globals.ScriptDir == "" then
+        local info = debug.getinfo(2, "S")
+        local src = ((info and (info.source or info.short_src)) or ""):gsub("^@", ""):gsub("\\", "/")
+        Globals.ScriptName = src:match("/lua/([^/]+)/") or "rgmercs"
+        Globals.ScriptDir = string.format("%s/%s", mq.TLO.Lua.Dir(), Globals.ScriptName)
+    end
+
+    Config.CacheCustomColors()
+
+    self.SettingsLoadComplete = true
+
+    return true
+end
+
+function Config:UpdateCommandHandlers()
+    self.CommandHandlers = {}
+    local startTime = Globals.GetTimeMS()
+    local submoduleDefaults = self:GetAllModuleDefaultSettings()
+
+    for moduleName, moduleSettings in pairs(Config.moduleDefaultSettings) do
+        local modstartTime = Globals.GetTimeMS()
+        for setting, _ in pairs(moduleSettings or {}) do
+            local setstartTime = Globals.GetTimeMS()
+            local handled, usageString = self:GetUsageText(setting or "", true, submoduleDefaults[moduleName] or {})
+            local setendTime = Globals.GetTimeMS()
+            Logger.log_super_verbose("\ag[Config] \ayGetUsageText() took %.3f seconds for %s.%s", (setendTime - setstartTime) / 1000, moduleName, setting)
+
+            if handled then
+                self.CommandHandlers[setting:lower()] = {
+                    name = setting,
+                    usage = usageString,
+                    subModule = moduleName,
+                    category = submoduleDefaults[moduleName][setting].Category,
+                    about = type(submoduleDefaults[moduleName][setting].Tooltip) == "function" and submoduleDefaults[moduleName][setting].Tooltip() or
+                        submoduleDefaults[moduleName][setting].Tooltip,
+                }
+            end
+        end
+        local modendTime = Globals.GetTimeMS()
+        Logger.log_debug("\ag[Config] \ayGeting all Settings took %.3f seconds to process module %s.", (modendTime - modstartTime) / 1000, moduleName)
+    end
+
+    local endTime = Globals.GetTimeMS()
+
+    Logger.log_debug("\ag[Config] \ayUpdateCommandHandlers() took %.3f seconds to execute for %d modules.", (endTime - startTime) / 1000,
+        Tables.GetTableSize(Config.moduleDefaultSettings))
+end
+
+---@param config string
+---@param showUsageText boolean
+---@param defaults table
+---@return boolean
+---@return string
+function Config:GetUsageText(config, showUsageText, defaults, valueOnly)
+    local handledType = false
+    local usageString = showUsageText and string.format("/rgl set %s | ", Strings.PadString(config, 30, false)) or ""
+    local configData = defaults[config]
+
+    local rangeText = ""
+    local defaultText = ""
+    local currentText = ""
+
+    if configData.Type == 'Color' then
+        rangeText = string.format("\aw[%s\ax]", Strings.PadString(string.format("\a-y<0.0-1.0>\aw, \a-y<0.0-1.0>\aw, \a-y<0.0-1.0>, \a-y<0.0-1.0>"), 15, false))
+        defaultText = string.format("[\a-tDefault: %s\ax]",
+            Strings.PadString(string.format("\ar%g\aw, \ag%g\aw, \at%g, \aw%g", configData.Default.x, configData.Default.y, configData.Default.z, configData.Default.w), 8, false))
+        currentText = string.format("\ar%g\aw, \ag%g\aw, \at%g, \aw%g", Config:GetSetting(config).x, Config:GetSetting(config).y, Config:GetSetting(config).z,
+            Config:GetSetting(config).w)
+        handledType = true
+    elseif type(configData.Default) == 'number' then
+        rangeText = string.format("\aw[%s\ax]", Strings.PadString(string.format("\a-yRange: \a-y%d\aw-\a-y%d", configData.Min or 0, configData.Max or 999), 15, false))
+        defaultText = string.format("[\a-tDefault: %s\ax]", Strings.PadString(tostring(configData.Default), 8, false))
+        currentText = string.format("%d", Config:GetSetting(config))
+        handledType = true
+    elseif type(configData.Default) == 'boolean' then
+        rangeText = string.format("\aw[%s\ax]", Strings.PadString(string.format("\a-yType : \a-yon\aw|\a-yoff"), 15, false))
+        defaultText = string.format("[\a-tDefault: %s\ax]", Strings.PadString(Strings.BoolToString(configData.Default), 8, false))
+        currentText = (string.format("%s", Strings.BoolToString(Config:GetSetting(config))))
+        handledType = true
+    elseif type(configData.Default) == 'string' then
+        rangeText = string.format("\aw[%s\ax]", Strings.PadString(string.format("\a-y<\"str\">"), 15, false))
+        defaultText = string.format("[\a-tDefault: %s\ax]", Strings.PadString("\"" .. configData.Default .. "\"", 8, false))
+        currentText = string.format("%s", Config:GetSetting(config))
+        handledType = true
+    elseif type(configData.Default) == 'table' then
+        rangeText = string.format("\aw[%s\ax]", Strings.PadString(string.format("\a-y<\"table\">"), 15, false))
+        defaultText = string.format("[\a-tDefault: %s\ax]", Strings.PadString(Strings.TableToString(configData.Default), 8, false))
+        currentText = string.format("%s", Strings.TableToString(Config:GetSetting(config)))
+        if #currentText > 120 then
+            currentText = currentText:sub(1, 120) .. "..."
+        end
+
+        handledType = true
+    end
+
+    if valueOnly then
+        usageString = usageString ..
+            string.format("%s",
+                Strings.PadString(currentText, 5, false)
+            )
+    else
+        usageString = usageString ..
+            string.format("  %s | %s | %s", Strings.PadString(currentText, 25, false), Strings.PadString(rangeText, 15, false), Strings.PadString(defaultText, 5, false)
+            )
+    end
+
+    return handledType, usageString
+end
+
+function Config:GetTempSetting(setting)
+    local module = Config.TempSettings.SettingToModuleCache[setting]
+    if not module then return nil end
+    local tempValue = self.moduleTempSettings[module] and self.moduleTempSettings[module][setting]
+    return tempValue
+end
+
+function Config:GetModuleDefaultSettings(module)
+    return self.moduleDefaultSettings[module] or {}
+end
+
+function Config:PeerGetModuleDefaultSettings(peer, module)
+    if peer == nil or peer == Comms.GetPeerName() then
+        return self:GetModuleDefaultSettings(module)
+    end
+
+    if self.observedPeer ~= peer then
+        Logger.log_error("PeerGetModuleDefaultSettings called for %s but observed peer is %s", peer, self.observedPeer or "nil")
+        return {}
+    end
+
+    return self.peerModuleDefaultSettings[module] or {}
+end
+
+function Config:GetModuleSettingCategories(module)
+    return self.moduleSettingCategories[module] or {}
+end
+
+function Config:PeerGetModuleSettingCategories(peer, module)
+    if peer == nil or peer == Comms.GetPeerName() then
+        return self:GetModuleSettingCategories(module)
+    end
+
+    if self.observedPeer ~= peer then
+        Logger.log_error("PeerGetModuleSettingCategories called for %s but observed peer is %s", peer, self.observedPeer or "nil")
+        return {}
+    end
+
+    return self.peerModuleSettingCategories[module] or {}
+end
+
+--- Returns the full effective settings table for a module (db values + temp overrides).
+--- @param module string
+--- @return table
+function Config:GetModuleSettings(module)
+    local defaults = self.moduleDefaultSettings[module]
+    if not defaults then return {} end
+    local result = {}
+    for setting, _ in pairs(defaults) do
+        result[setting] = self:GetSetting(setting)
+    end
+    return result
+end
+
+function Config:GetAllModuleSettings()
+    local result = {}
+    for module, _ in pairs(self.moduleDefaultSettings) do
+        result[module] = self:GetModuleSettings(module)
+    end
+    return result
+end
+
+function Config:GetAllModuleDefaultSettings()
+    return self.moduleDefaultSettings or {}
+end
+
+function Config:PeerGetAllModuleDefaultSettings(peer)
+    if peer == nil or peer == Comms.GetPeerName() then
+        return self:GetAllModuleDefaultSettings()
+    end
+
+    if self.observedPeer ~= peer then
+        Logger.log_error("PeerGetAllModuleDefaultSettings called for %s but observed peer is %s", peer, self.observedPeer or "nil")
+        return {}
+    end
+
+    return self.peerModuleDefaultSettings or {}
+end
+
+function Config:GetAllModuleSettingCategories()
+    return self.moduleSettingCategories or {}
+end
+
+function Config:PeerGetAllModuleSettingCategories(peer)
+    if peer == nil or peer == Comms.GetPeerName() then
+        return self:GetAllModuleSettingCategories()
+    end
+
+    if self.observedPeer ~= peer then
+        Logger.log_error("PeerGetAllModuleSettingCategories called for %s but observed peer is %s", peer, self.observedPeer or "nil")
+        return {}
+    end
+
+    return self.peerModuleSettingCategories or {}
+end
+
+function Config:GetAllSettingsForCategory(category)
+    return Config.TempSettings.SettingsCategoryToSettingMapping[category] or {}
+end
+
+function Config:PeerGetAllSettingsForCategory(peer, category)
+    if peer == nil or peer == Comms.GetPeerName() then
+        return self:GetAllSettingsForCategory(category)
+    end
+
+    if self.observedPeer ~= peer then
+        Logger.log_error("PeerGetAllSettingsForCategory called for %s but observed peer is %s", peer, self.observedPeer or "nil")
+        return {}
+    end
+
+    return Config.TempSettings.PeerSettingsCategoryToSettingMapping[category] or {}
+end
+
+function Config:GetModuleForSetting(setting)
+    return Config.TempSettings.SettingToModuleCache[setting] or "None"
+end
+
+function Config:PeerGetModuleForSetting(peer, setting)
+    if peer == nil or peer == Comms.GetPeerName() then
+        return self:GetModuleForSetting(setting)
+    end
+
+    if self.observedPeer ~= peer then
+        Logger.log_error("PeerGetModuleForSetting called for %s but observed peer is %s", peer, self.observedPeer or "nil")
+        return {}
+    end
+
+    return Config.TempSettings.PeerSettingToModuleCache[setting] or "None"
+end
+
+function Config:SettingsLoaded()
+    return self.SettingsLoadComplete
+end
+
+--- Retrieves if a specified setting exists.
+--- @param setting string The name of the setting to retrieve.
+--- @return boolean true if this setting exists.
+function Config:HaveSetting(setting)
+    return Config.TempSettings.SettingToModuleCache[setting] ~= nil
+end
+
+--- Retrieves a specified setting.
+--- @param peer string The name of the peer to retrieve the setting for.
+--- @param setting string The name of the setting to retrieve.
+--- @param failOk boolean? If true, the function will not raise an error if the setting is not found.
+--- @return any The value of the setting, or nil if the setting is not found and failOk is true.
+function Config:PeerGetSetting(peer, setting, failOk)
+    if peer == nil or peer == Comms.GetPeerName() then
+        return self:GetSetting(setting, failOk)
+    end
+
+    if self.observedPeer ~= peer then
+        Logger.log_error("PeerGetSetting called for %s but observed peer is %s", peer, self.observedPeer or "nil")
+        return nil
+    end
+
+    if not Config.TempSettings.PeerSettingToModuleCache[setting] then
+        if not failOk then
+            Logger.log_error("Setting %s was not found in the module cache for: %s!", setting, peer)
+        end
+        return nil
+    end
+
+    return self.peerModuleSettings[Config.TempSettings.PeerSettingToModuleCache[setting]][setting]
+end
+
+function Config:SettingDbRead(module, key)
+    local scope = Config.TempSettings.SettingToScopeCache[key]
+    if scope == "server" then
+        return self.Db:getServerValue(Globals.ServerEnv, module, key)
+    end
+    return self.Db:getValue(Globals.CurServer, Globals.CurLoadedChar, Globals.CurLoadedClass, module, key)
+end
+
+function Config:SettingDbWrite(module, key, value)
+    local scope = Config.TempSettings.SettingToScopeCache[key]
+    if scope == "server" then
+        return self.Db:setServerValue(Globals.ServerEnv, module, key, value)
+    end
+    return self.Db:setValue(Globals.CurServer, Globals.CurLoadedChar, Globals.CurLoadedClass, module, key, value)
+end
+
+function Config:SettingDbDelete(module, key)
+    local scope = Config.TempSettings.SettingToScopeCache[key]
+    if scope == "server" then
+        return self.Db:deleteServerValue(Globals.ServerEnv, module, key)
+    elseif scope then
+        return self.Db:deleteValue(Globals.CurServer, Globals.CurLoadedChar, Globals.CurLoadedClass, module, key)
+    end
+    -- unknown scope (deprecated key) - try both, idempotent
+    self.Db:deleteValue(Globals.CurServer, Globals.CurLoadedChar, Globals.CurLoadedClass, module, key)
+    self.Db:deleteServerValue(Globals.ServerEnv, module, key)
+end
+
+--- True when the active class config defines Class HealPct* settings (e.g. EQ Might CLR).
+--- Used to hide unused core Light/Main/Group Heal Point UI.
+---@param peer string?
+---@return boolean
+function Config:UsesClassHealPcts(peer)
+    -- Sentinel key from Class Heal: Regular (present whenever HealPct* defaults are built).
+    local sentinel = "HealPctLight_WAR"
+    if peer == nil or peer == Comms.GetPeerName() then
+        return Config:HaveSetting(sentinel)
+    end
+    return (Config.TempSettings.PeerSettingToModuleCache or {})[sentinel] ~= nil
+end
+
+--- Retrieves a specified setting.
+--- @param setting string The name of the setting to retrieve.
+--- @param failOk boolean? If true, the function will not raise an error if the setting is not found.
+--- @return any The value of the setting, or nil if the setting is not found and failOk is true.
+function Config:GetSetting(setting, failOk)
+    if not Config.TempSettings.SettingToModuleCache[setting] then
+        if not failOk then
+            Logger.log_error("Setting %s was not found in the module cache!", setting)
+        end
+        return nil
+    end
+
+    local value = self:GetTempSetting(setting)
+    if value == nil then
+        value = self:SettingDbRead(Config.TempSettings.SettingToModuleCache[setting], setting)
+    end
+
+    return value
+end
+
+--- Retrieves a specified setting default info.
+--- @param setting string The name of the setting to retrieve.
+--- @return any The value of the setting, or nil if the setting is not found and failOk is true.
+function Config:GetSettingDefaults(setting)
+    if not Config.TempSettings.SettingToModuleCache[setting] then
+        Logger.log_error("Setting %s was not found in the module cache!", setting)
+        return nil
+    end
+    return self:GetModuleDefaultSettings(Config.TempSettings.SettingToModuleCache[setting])[setting]
+end
+
+--- Retrieves a specified setting default info for a peer.
+--- @param peer string The name of the peer to retrieve the setting for.
+--- @param setting string The name of the setting to retrieve.
+--- @return any The value of the setting, or nil if the setting is not found and failOk is true.
+function Config:PeerGetSettingDefaults(peer, setting)
+    if peer == nil or peer == Comms.GetPeerName() then
+        return self:GetSettingDefaults(setting)
+    end
+
+    if self.observedPeer ~= peer then
+        Logger.log_error("PeerGetSettingDefaults called for %s but observed peer is %s", peer, self.observedPeer or "nil")
+        return nil
+    end
+
+    if not Config.TempSettings.PeerSettingToModuleCache[setting] then
+        Logger.log_error("Setting %s was not found in the module cache!", setting)
+        return nil
+    end
+
+    return self:PeerGetModuleDefaultSettings(peer, Config.TempSettings.PeerSettingToModuleCache[setting])[setting]
+end
+
+--- Validates and sets a configuration setting for a specified module.
+--- @param module string: The name of the module for which the setting is being configured.
+--- @param setting string: The name of the setting to be validated and set.
+--- @param value any: The value to be assigned to the setting.
+--- @return boolean|string|number|nil: Returns a valid value for the setting.
+function Config:MakeValidSetting(module, setting, value)
+    local defaultConfig = self:GetModuleDefaultSettings(module)
+
+    if defaultConfig[setting].Type == "Color" then
+        if type(value) ~= "table" then
+            Logger.log_error("\ayError: %s is a color setting and requires a table value, falling back to previous value.", setting)
+            return nil
+        end
+        return value
+    elseif type(defaultConfig[setting].Default) == 'number' then
+        value = tonumber(value)
+        if not value or value > (defaultConfig[setting].Max or 99999) or value < (defaultConfig[setting].Min or 0) then
+            Logger.log_error("\ayError: Invalid or out-of-range value supplied for %s, falling back to previous value.", setting)
+            local _, update = Config:GetUsageText(setting, true, defaultConfig)
+            Logger.log_error(update)
+            return nil
+        end
+
+        return value
+    elseif type(defaultConfig[setting].Default) == 'boolean' then
+        local boolValue = false
+        if value == true or value == "true" or value == "on" or (tonumber(value) or 0) >= 1 then
+            boolValue = true
+        end
+
+        return boolValue
+    elseif type(defaultConfig[setting].Default) == 'string' then
+        if type(value) ~= "string" then
+            Logger.log_error("\ayError: %s is a string setting and cannot accept a %s value, falling back to previous value.", setting, type(value))
+            return nil
+        end
+        local validValues = defaultConfig[setting].ValidValues
+        if validValues then
+            local normalizedValue = value:lower():gsub(" ", "")
+            for _, validValue in ipairs(validValues) do
+                if validValue:lower():gsub(" ", "") == normalizedValue then
+                    return validValue
+                end
+            end
+            Logger.log_error("\ayError: Invalid value '%s' for %s, falling back to previous value. Valid values: %s", value, setting, table.concat(validValues, ", "))
+            return nil
+        end
+        return value
+    elseif type(defaultConfig[setting].Default) == 'table' then
+        if type(value) ~= "table" then
+            Logger.log_error("\ayError: %s is a list setting and cannot be set directly from the command line, falling back to previous value.", setting)
+            return nil
+        end
+        return value
+    end
+
+    Logger.log_error("Setting %s could not be validated! (%s)", setting, Strings.TableToString(defaultConfig[setting], 512))
+    return nil
+end
+
+--- Converts a given setting name into a valid format and module name
+--- This function ensures that the setting name adheres to the required format for further processing.
+--- @param setting string The original setting name that needs to be validated and formatted.
+--- @return string, string The module of the setting and The validated and formatted setting name.
+function Config:MakeValidSettingName(setting)
+    local validSetting = self.TempSettings.SettingsLowerToNameCache[setting:lower()] or "None"
+
+    return Config.TempSettings.SettingToModuleCache[validSetting] or "None", validSetting
+end
+
+---Sets a setting from either in global or a module setting table.
+--- @param peer string: The name of the peer to set the setting for.
+--- @param setting string: The name of the setting to be updated.
+--- @param value any: The new value to assign to the setting.
+--- @param tempOnly boolean?: The new value to assign to the setting.
+function Config:PeerSetSetting(peer, setting, value, tempOnly)
+    if peer == nil or peer == Comms.GetPeerName() then
+        return self:SetSetting(setting, value, tempOnly)
+    end
+
+    Logger.log_info("\aw[\ar%s\aw] Sending => \ag%s = \a-y%s", peer, setting, tostring(value))
+    Comms.SendMessage(peer, self._name, "RemoteSetSetting", { Setting = setting, Value = value, })
+end
+
+function Config:RemoteSetSetting(data)
+    if data and data.Setting and data.Value ~= nil then
+        Logger.log_debug("Received SetSetting for module \awSetSetting :: \at%s \awto \ag%s", data.Setting, tostring(data.Value))
+        self:HandleBind(data.Setting, data.Value)
+    end
+end
+
+---Toggles a boolean setting.
+--- @param setting string: The name of the setting to be updated.
+--- @param tempOnly boolean?: The new value to assign to the setting.
+--- @param noCallback boolean?: If true, the setting will be updated without triggering the OnChange callback.
+function Config:ToggleSetting(setting, tempOnly, noCallback)
+    local currentValue = Config:GetSetting(setting)
+    if type(currentValue) ~= "boolean" then
+        Logger.log_error("Cannot toggle setting %s because it is not a boolean!", setting)
+        return
+    end
+
+    Config:SetSetting(setting, not currentValue, tempOnly, noCallback)
+end
+
+---Sets a setting from either in global or a module setting table.
+--- @param setting string: The name of the setting to be updated.
+--- @param value any: The new value to assign to the setting.
+--- @param tempOnly boolean?: The new value to assign to the setting.
+--- @param noCallback boolean?: If true, the setting will be updated without triggering the OnChange callback.
+function Config:SetSetting(setting, value, tempOnly, noCallback)
+    local settingModuleName, cleanSetting = self:MakeValidSettingName(setting)
+
+    if settingModuleName == "None" then
+        Logger.log_error("Setting %s was not found!", setting)
+        return
+    end
+
+    local oldValue = Config:GetSetting(cleanSetting)
+    local defaultConfig = self:GetModuleDefaultSettings(settingModuleName)
+
+    local cleanValue = self:MakeValidSetting(settingModuleName, cleanSetting, value)
+    local _, beforeUpdate = Config:GetUsageText(cleanSetting, false, defaultConfig, true)
+    if cleanValue ~= nil then
+        if tempOnly then
+            self.moduleTempSettings[settingModuleName][cleanSetting] = cleanValue
+        else
+            self:SettingDbWrite(settingModuleName, cleanSetting, cleanValue)
+            if Config.TempSettings.SettingToScopeCache[cleanSetting] == "server" then
+                self.moduleTempSettings[settingModuleName][cleanSetting] = nil
+            else
+                self.moduleTempSettings[settingModuleName][cleanSetting] = cleanValue
+            end
+        end
+    else
+        Logger.log_info("\ayFailed to update setting %s, invalid value supplied.", cleanSetting)
+    end
+
+    if defaultConfig[cleanSetting].RequiresLoadoutChange then
+        Modules:ExecModule("Class", "RescanLoadout")
+    end
+
+    local _, afterUpdate = Config:GetUsageText(cleanSetting, false, defaultConfig)
+
+    local valueChanged = oldValue ~= cleanValue
+    if type(cleanValue) == "table" and type(oldValue) == "table" then
+        -- since tables are ref types we just have to assume they changed.
+        valueChanged = true
+    end
+
+    if valueChanged then
+        Logger.log_debug("(%s) \ag%s\aw is now:\ax %-5s \ay[Previous:\ax %s\ay]", settingModuleName, cleanSetting, afterUpdate, beforeUpdate)
+
+        if defaultConfig[cleanSetting].OnChange and noCallback ~= true then
+            defaultConfig[cleanSetting].OnChange(oldValue, cleanValue)
+        end
+    end
+
+    -- broadcast the change to any listeners.
+    Comms.BroadcastMessage(self._name, "UpdatePeerSetSetting",
+        { peer = Comms.GetPeerName(), module = settingModuleName, setting = cleanSetting, value = cleanValue, })
+end
+
+--- Temporarily sets a setting
+--- @param setting string: The name of the setting to be updated.
+--- @param value any: The new value to assign to the setting.
+function Config:SetTempSetting(setting, value)
+    self:SetSetting(setting, value, true)
+end
+
+--- Clears a Temporarily sets a setting
+--- @param setting string: The name of the setting to be updated.
+function Config:ClearTempSetting(setting)
+    local settingModuleName, cleanSetting = self:MakeValidSettingName(setting)
+
+    if settingModuleName == "None" then
+        Logger.log_error("Setting %s was not found!", setting)
+        return
+    end
+
+    if self.moduleTempSettings[settingModuleName] then
+        self.moduleTempSettings[settingModuleName][cleanSetting] = nil
+    end
+end
+
+--- Clears Temporarily set settings
+function Config:ClearAllTempSettings()
+    for module, _ in pairs(self.moduleTempSettings) do
+        self.moduleTempSettings[module] = {}
+        for setting, _ in pairs(self.moduleDefaultSettings[module] or {}) do
+            if Config.TempSettings.SettingToScopeCache[setting] ~= "server" then
+                self.moduleTempSettings[module][setting] = self:SettingDbRead(module, setting)
+            end
+        end
+    end
+end
+
+--- Resolves the default values for a given settings table.
+--- This function takes a table of default values and a table of settings,
+--- and ensures that any missing settings are filled in with the default values.
+---
+--- @param defaults table The table containing default values.
+--- @param settings table The table containing user-defined settings.
+--- @return table, boolean The settings table with defaults applied where necessary. A bool if the table changed and requires saving.
+function Config.ResolveDefaults(defaults, settings, module)
+    -- Setup Defaults
+    local changed = false
+    if settings == nil then
+        settings = {}
+        changed = true
+        Logger.log_error("\arSettings file was empty or corrupt -- creating a new one with default values.")
+    end
+
+    for k, v in pairs(defaults) do
+        if type(v.Default) == "function" then
+            v.DefaultFn = v.Default
+        end
+
+        if v.DefaultFn then
+            v.Default = v.DefaultFn()
+        end
+
+        if settings[k] == nil then
+            settings[k] = type(v.Default) == "table" and Tables.DeepCopy(v.Default) or v.Default
+            changed = true
+        end
+
+        if type(settings[k]) ~= type(v.Default) then
+            Logger.log_warn("\ayData type of setting [\am%s\ay] has been deprecated -- resetting to default.", k)
+            settings[k] = type(v.Default) == "table" and Tables.DeepCopy(v.Default) or v.Default
+            changed = true
+        elseif v.Type == "Combo" and settings[k] > #v.ComboOptions then
+            Logger.log_warn("\aySetting value out of bounds [\am%s\ay] -- resetting to default.", k)
+            settings[k] = v.Default
+            changed = true
+        elseif type(settings[k]) == "number" and (settings[k] < (v.Min or -1) or settings[k] > (v.Max or 99999)) then
+            Logger.log_warn("\aySetting value out of bounds [\am%s\ay] -- resetting to default.", k)
+            settings[k] = v.Default
+            changed = true
+        end
+    end
+
+    -- Remove Deprecated options
+    for k, _ in pairs(settings) do
+        if not defaults[k] then
+            settings[k] = nil
+            Logger.log_info("\aySetting [\am%s\ay] has been deprecated -- removing from your config.", k)
+            if module then
+                Config:SettingDbDelete(module, k)
+            end
+            changed = true
+        end
+    end
+
+    return settings, changed
+end
+
+function Config:UnRegisterCategoryToSettingMapping(setting)
+    if not Config.TempSettings.SettingToModuleCache[setting] then return end
+
+    local category = Config:GetSettingDefaults(setting).Category
+    if self.TempSettings.SettingsCategoryToSettingMapping[category] then
+        for i, v in ipairs(self.TempSettings.SettingsCategoryToSettingMapping[category]) do
+            if v == setting then
+                table.remove(self.TempSettings.SettingsCategoryToSettingMapping[category], i)
+                break
+            end
+        end
+    end
+end
+
+function Config:RegisterCategoryToSettingMapping(setting)
+    local category = Config:GetSettingDefaults(setting).Category
+    self.TempSettings.SettingsCategoryToSettingMapping[category] = self.TempSettings.SettingsCategoryToSettingMapping[category] or {}
+    table.insert(self.TempSettings.SettingsCategoryToSettingMapping[category], setting)
+end
+
+function Config:PeerRegisterCategoryToSettingMapping(peer, setting)
+    local category = Config:PeerGetSettingDefaults(peer, setting).Category
+    self.TempSettings.PeerSettingsCategoryToSettingMapping[category] = self.TempSettings.PeerSettingsCategoryToSettingMapping[category] or {}
+    table.insert(self.TempSettings.PeerSettingsCategoryToSettingMapping[category], setting)
+end
+
+--- Returns the module already using any setting name in defaultSettings, plus
+--- the offending setting; setting names are matched without regard to case.
+---@param module string Module about to register the settings.
+---@param defaultSettings table? Candidate DefaultConfig table.
+---@return string? owner Name of the module already using one of the setting names.
+---@return string? setting The setting name that is already taken.
+function Config:FindConflictingSettingOwner(module, defaultSettings)
+    for setting in pairs(defaultSettings or {}) do
+        local registeredName = Config.TempSettings.SettingsLowerToNameCache[setting:lower()]
+        local owner = registeredName and Config.TempSettings.SettingToModuleCache[registeredName]
+        if owner and owner ~= module then
+            return owner, setting
+        end
+    end
+    return nil
+end
+
+function Config:RegisterModuleSettings(module, settings, defaultSettings, faq, firstSaveRequired)
+    if self.moduleDefaultSettings[module] then
+        Logger.log_error("\arModule %s has already registered settings!", module)
+        return
+    end
+
+    --Centralize category creation and setup the FAQs
+    local settingCategories = Set.new({})
+    for k, v in pairs(defaultSettings or {}) do
+        if v.Type ~= "Custom" then
+            settingCategories:add(v.Category)
+        end
+        faq[k] = { Question = v.FAQ, Answer = v.Answer, Settings_Used = k, }
+    end
+
+    -- ResolveDefaults only to detect missing/changed keys that need a db write
+    local resolvedSettings, settingsChanged = Config.ResolveDefaults(defaultSettings, settings, module)
+
+    self.moduleTempSettings[module] = {}
+    self.moduleDefaultSettings[module] = defaultSettings
+    self.moduleSettingCategories[module] = settingCategories
+
+    for setting, v in pairs(defaultSettings) do
+        if not v.Category or v.Category:len() == 0 then
+            self.moduleDefaultSettings[module][setting].Category = "Uncategorized"
+            self.moduleSettingCategories[module]:add("Uncategorized")
+        end
+
+        if Config.TempSettings.SettingToModuleCache[setting] ~= nil then
+            Logger.log_verbose(
+                "\ay[Setting] \arError: Key %s exists in multiple settings tables: \aw%s \arand \aw%s! Keeping first but this should be fixed!",
+                setting,
+                Config.TempSettings.SettingToModuleCache[setting], module)
+            self:RegisterCategoryToSettingMapping(setting)
+        else
+            Config.TempSettings.SettingToModuleCache[setting] = module
+            Config.TempSettings.SettingsLowerToNameCache[setting:lower()] = setting
+            self:RegisterCategoryToSettingMapping(setting)
+        end
+
+        Config.TempSettings.SettingToScopeCache[setting] = v.Scope
+
+        if v.Scope ~= "server" then
+            self.moduleTempSettings[module][setting] = resolvedSettings[setting]
+        end
+    end
+
+    if firstSaveRequired or settingsChanged then
+        self:SaveModuleSettings(module, resolvedSettings)
+    end
+
+    self.TempSettings.lastModuleRegisteredTime = Globals.GetTimeSeconds()
+
+    Logger.log_debug("\agModule %s - registered settings!", module)
+end
+
+function Config:ClearModuleSettings(module)
+    if not self.moduleDefaultSettings[module] then
+        Logger.log_error("\arModule %s is not registered!", module)
+        return
+    end
+
+    for setting, _ in pairs(self.moduleDefaultSettings[module]) do
+        self:UnRegisterCategoryToSettingMapping(setting)
+
+        if Config.TempSettings.SettingToModuleCache[setting] == module then
+            Config.TempSettings.SettingToModuleCache[setting] = nil
+            Config.TempSettings.SettingToScopeCache[setting] = nil
+
+            if Config.TempSettings.SettingsLowerToNameCache[setting:lower()] == setting then
+                Config.TempSettings.SettingsLowerToNameCache[setting:lower()] = nil
+            end
+        end
+    end
+
+    self.moduleTempSettings[module] = nil
+    self.moduleDefaultSettings[module] = nil
+    self.moduleSettingCategories[module] = nil
+
+    Logger.log_debug("\agModule %s - removed all settings!", module)
+end
+
+function Config:RequestPeerConfigs(peer)
+    Comms.SendMessage(peer, self._name, "SendConfigs", { from = Comms.GetPeerName(), })
+end
+
+function Config:PackageConfig(module)
+    return {
+        peer = Comms.GetPeerName(),
+        module = module,
+        settings = Config:GetAllModuleSettings()[module],
+        settingCategories = Config:GetModuleSettingCategories(module):toList() or {},
+        defaultSettings = Config:GetAllModuleDefaultSettings()[module],
+    }
+end
+
+function Config:SendConfigs(data)
+    Logger.log_debug("Received SendConfigs from %s - sending our configs.", data.from)
+    local modules = { "Core", }
+
+    for _, name in ipairs(Modules:GetModuleOrderedNames()) do
+        table.insert(modules, name)
+    end
+
+    for _, name in ipairs(modules) do
+        if Config.moduleDefaultSettings[name] ~= nil then
+            Comms.SendMessage(data.from, self._name, "UpdatePeerSettings", self:PackageConfig(name))
+        end
+    end
+end
+
+function Config:BroadcastConfigs()
+    local modules = { "Core", }
+
+    for _, name in ipairs(Modules:GetModuleOrderedNames()) do
+        table.insert(modules, name)
+    end
+
+    for _, name in ipairs(modules) do
+        if Config.moduleDefaultSettings[name] ~= nil then
+            Comms.BroadcastMessage(self._name, "UpdatePeerSettings", self:PackageConfig(name))
+        end
+    end
+end
+
+function Config:GetobservedPeer()
+    return self.observedPeer
+end
+
+function Config:GetLastModuleRegisteredTime()
+    return self.TempSettings.lastModuleRegisteredTime
+end
+
+function Config:ClearAllModuleSettings()
+    self.moduleTempSettings = {}
+    self.moduleDefaultSettings = {}
+    self.moduleSettingCategories = {}
+    self.TempSettings.SettingToModuleCache = {}
+    self.TempSettings.SettingToScopeCache = {}
+    self.TempSettings.SettingsLowerToNameCache = {}
+    self.TempSettings.SettingsCategoryToSettingMapping = {}
+    self.SettingsLoadComplete = false
+end
+
+function Config:SaveModuleSettings(module, settings)
+    local defaultSettings    = self:GetModuleDefaultSettings(module)
+    local settingsCategories = self:GetModuleSettingCategories(module):toList() or {}
+
+    for setting, value in pairs(settings) do
+        if Config.TempSettings.SettingToScopeCache[setting] == "server" then
+            -- seed only, never overwrite existing rows
+            self.Db:seedServerValue(Globals.ServerEnv, module, setting, value)
+        else
+            self:SettingDbWrite(module, setting, value)
+        end
+    end
+    Logger.log_debug("\agModule %s - save settings requested!", module)
+
+    -- broadcast the change to any listeners.
+    Comms.BroadcastMessage(self._name, "UpdatePeerSettings",
+        { peer = Comms.GetPeerName(), module = module, settings = settings, settingCategories = settingsCategories, defaultSettings = defaultSettings, })
+end
+
+function Config:ValidatePeers()
+    Comms.ValidatePeers(Config:GetSetting("ActorPeerTimeout"))
+
+    if not Comms.IsValidPeer(self.observedPeer) then
+        self.peerModuleSettings                                = {}
+        self.peerModuleDefaultSettings                         = {}
+        self.peerModuleSettingCategories                       = {}
+        self.TempSettings.PeerModuleSettingsLowerToNameCache   = {}
+        self.TempSettings.PeerSettingToModuleCache             = {}
+        self.TempSettings.PeerSettingsCategoryToSettingMapping = {}
+        self.observedPeer                                      = nil
+    end
+end
+
+function Config:SetRemotePeer(peer)
+    if self.observedPeer ~= peer then
+        self.peerModuleSettings                                = {}
+        self.peerModuleDefaultSettings                         = {}
+        self.peerModuleSettingCategories                       = {}
+        self.TempSettings.PeerModuleSettingsLowerToNameCache   = {}
+        self.TempSettings.PeerSettingToModuleCache             = {}
+        self.TempSettings.PeerSettingsCategoryToSettingMapping = {}
+        self.observedPeer                                      = peer
+        self.TempSettings.LastPeerConfigReceivedTime           = 0
+
+        self:RequestPeerConfigs(peer)
+    end
+end
+
+function Config:UpdatePeerSetSetting(data)
+    local peer    = data.peer
+    local module  = data.module
+    local setting = data.setting
+    local value   = data.value
+
+    if self.observedPeer ~= peer then
+        return
+    end
+    Logger.log_debug("Received UpdatePeerSetSetting from %s for module %s, setting %s", peer, module, setting)
+
+    if self.peerModuleSettings[module] == nil then
+        Logger.log_error("Received UpdatePeerSetSetting for module %s but we don't have any settings for that module!", tostring(module))
+        return
+    end
+
+    if self.peerModuleSettings[module][setting] == nil then
+        Logger.log_error("Received UpdatePeerSetSetting for setting %s but we don't have that setting for module %s!", tostring(setting), tostring(module))
+        return
+    end
+
+    self.peerModuleSettings[module][setting] = value
+end
+
+function Config:UpdatePeerSettings(data)
+    local peer   = data.peer
+    local module = data.module
+
+    if self.observedPeer ~= peer then
+        return
+    end
+
+    local settings, settingsCategories, defaultSettings = data.settings or {}, data.settingCategories or {}, data.defaultSettings or {}
+
+    self.peerModuleDefaultSettings[module] = defaultSettings
+
+    -- remove old settings from caches
+    for setting, _ in pairs(self.peerModuleSettings[module] or {}) do
+        if self.TempSettings.PeerSettingsCategoryToSettingMapping and Config:PeerGetSettingDefaults(peer, setting) then
+            local categoryListLen = #self.TempSettings.PeerSettingsCategoryToSettingMapping[Config:PeerGetSettingDefaults(peer, setting).Category] or 0
+            for i = categoryListLen, 1, -1 do
+                if self.TempSettings.PeerSettingsCategoryToSettingMapping[Config:PeerGetSettingDefaults(peer, setting).Category][i] == setting then
+                    table.remove(self.TempSettings.PeerSettingsCategoryToSettingMapping[Config:PeerGetSettingDefaults(peer, setting).Category], i)
+                    break
+                end
+            end
+        end
+        self.TempSettings.PeerSettingToModuleCache[setting] = nil
+        self.TempSettings.PeerModuleSettingsLowerToNameCache[setting:lower()] = nil
+    end
+
+    self.peerModuleSettings[module] = Tables.DeepCopy(settings or {})
+    self.peerModuleSettingCategories[module] = Set.new(settingsCategories or {})
+
+    for setting, _ in pairs(settings) do
+        self.TempSettings.PeerSettingToModuleCache[setting] = module
+        self.TempSettings.PeerModuleSettingsLowerToNameCache[setting:lower()] = setting
+        self:PeerRegisterCategoryToSettingMapping(peer, setting)
+    end
+
+    self.TempSettings.LastPeerConfigReceivedTime = Globals.GetTimeSeconds()
+end
+
+function Config:GetPeerLastConfigReceivedTime(peer)
+    if peer ~= self.observedPeer then
+        return 0
+    end
+
+    return self.TempSettings.LastPeerConfigReceivedTime or 0
+end
+
+--- Adds the given name to the Assist List.
+--- @param name string: The name of the PC to be added.
+--- @param listName string: The list of PCs to add to.
+function Config:ListAdd(name, listName)
+    if not name or name == "" then
+        Logger.log_error("\ar%s Add: this command requires a valid argument!", listName)
+        return
+    end
+
+    local addList = Config:GetSetting(listName)
+
+    for _, cur_name in ipairs(addList or {}) do
+        if cur_name:lower() == name:lower() then
+            return
+        end
+    end
+
+    table.insert(addList, name)
+    self:SetSetting(listName, addList)
+    Logger.log_info("\ax%s: \ag%s\ax has been\ag added\ax to the list at position \at%d\ax!", listName, name,
+        #self:GetSetting(listName))
+end
+
+function Config:ListDelete(arg1, listName)
+    if not arg1 then
+        Logger.log_error("\ar%s Delete: this command requires a valid argument!", listName or "")
+        return
+    end
+
+    local list = self:GetSetting(listName)
+
+    if type(arg1) == 'string' then
+        arg1 = self:ConvertListNameToID(arg1, listName)
+    end
+
+    if type(arg1) == 'number' and arg1 > 0 then
+        if arg1 <= #list then
+            Logger.log_info("\ax%s: \ag%s\ax has been \ardeleted\ax from the list!", listName, list[arg1])
+            table.remove(list, arg1)
+            self:SetSetting(listName, list)
+        else
+            Logger.log_error("\ar%s Delete: %d is not a valid assist list ID!", listName, arg1)
+        end
+        return
+    end
+    Logger.log_error("\ar%s Delete: %s was not on the list or is not a valid argument!", listName, arg1)
+end
+
+function Config:ListClear(listName)
+    Logger.log_info("%s: \ayThe list has been cleared!", listName)
+    Config:SetSetting(listName, {})
+end
+
+--- Moves the PC at the given index up.
+--- @param id number The index of the PC to move.
+--- @param listName string: The list to adjust.
+function Config:ListMoveUp(id, listName)
+    if type(id) == 'string' then
+        id = self:ConvertListNameToID(id, listName)
+    end
+
+    local newId = id - 1
+
+    if newId < 1 then return end
+    local list = self:GetSetting(listName)
+
+    if id > #list then return end
+
+    list[newId], list[id] = list[id], list[newId]
+    Logger.log_info("\ax%s: \ag%s\ax has been\ag moved up\ax to position \at%d", listName, self:GetSetting(listName)[newId], newId)
+    self:SetSetting(listName, list)
+end
+
+function Config:ListMoveTop(id, listName)
+    if type(id) == 'string' then
+        id = self:ConvertListNameToID(id, listName)
+    end
+
+    if id < 2 then return end
+    local list = self:GetSetting(listName)
+
+    if id > #list then return end
+
+    local newId = 1
+
+    list[newId], list[id] = list[id], list[newId]
+
+    Logger.log_info("\ax%s: \ag%s\ax has been\ag moved to the top of the list!", listName, self:GetSetting(listName)[1])
+    self:SetSetting(listName, list)
+end
+
+--- Moves the PC at the given index down.
+--- @param id number The index of the PC to move.
+--- @param listName string: The list to adjust.
+function Config:ListMoveDown(id, listName)
+    if not id then
+        Logger.log_error("\ar%s Move Down: this command requires a valid argument!", listName)
+        return
+    end
+
+    if type(id) == 'string' then
+        id = self:ConvertListNameToID(id, listName)
+    end
+
+    if id < 1 then return end
+    local newId = id + 1
+    local list = self:GetSetting(listName)
+
+    if newId > #list then return end
+
+    list[newId], list[id] = list[id], list[newId]
+
+    Logger.log_info("\ax%s: \ag%s\ax has been\ar moved down\ax to position \at%d", listName, self:GetSetting(listName)[newId], newId)
+
+    self:SetSetting(listName, list)
+end
+
+--- Resolve a name-or-index argument to a 1-based index in `list`. Returns nil if invalid/not found.
+--- @param arg1 string|number
+--- @param list table
+--- @return number|nil
+function Config:ResolveListIndex(arg1, list)
+    if type(arg1) == 'number' then return arg1 end
+    if type(arg1) ~= 'string' then return nil end
+    if arg1:match("^%d+$") then return tonumber(arg1) end
+    for idx, cur in ipairs(list) do
+        if cur:lower() == arg1:lower() then return idx end
+    end
+    return nil
+end
+
+function Config:ConvertListNameToID(arg1, listName)
+    local idx = self:ResolveListIndex(arg1, self:GetSetting(listName) or {})
+    return idx or 0
+end
+
+--- Adds the given name to a zone-keyed list for the current (or specified) zone.
+--- Storage shape: list[zoneShort] = { "Name 1", ... }. Silent on duplicates.
+--- @param name string The name to add.
+--- @param listName string The setting name of the zone-keyed list.
+--- @param zoneKey string? Optional zone short name (lowercase). Defaults to current zone.
+function Config:ZoneListAdd(name, listName, zoneKey)
+    if not name or name == "" then
+        Logger.log_error("\ar%s Add: this command requires a valid argument!", listName)
+        return
+    end
+    zoneKey = zoneKey or (mq.TLO.Zone.ShortName() or ""):lower()
+    local list = self:GetSetting(listName) or {}
+    list[zoneKey] = list[zoneKey] or {}
+    for _, cur in ipairs(list[zoneKey]) do
+        if cur:lower() == name:lower() then return end
+    end
+    table.insert(list[zoneKey], name)
+    self:SetSetting(listName, list)
+    Logger.log_info("\ax%s [\ay%s\ax]: \ag%s\ax added at position \at%d\ax.", listName, zoneKey, name, #list[zoneKey])
+end
+
+--- Deletes a name (or index) from a zone-keyed list for the current (or specified) zone.
+--- @param arg1 string|number Either a name to match or a 1-based index.
+--- @param listName string The setting name of the zone-keyed list.
+--- @param zoneKey string? Optional zone short name (lowercase). Defaults to current zone.
+function Config:ZoneListDelete(arg1, listName, zoneKey)
+    if not arg1 then
+        Logger.log_error("\ar%s Delete: this command requires a valid argument!", listName)
+        return
+    end
+    zoneKey = zoneKey or (mq.TLO.Zone.ShortName() or ""):lower()
+    local list = self:GetSetting(listName) or {}
+    local zoneList = list[zoneKey]
+    if not zoneList or #zoneList == 0 then
+        Logger.log_error("\ar%s Delete: zone [\ay%s\ar] has no entries!", listName, zoneKey)
+        return
+    end
+    local idx = self:ResolveListIndex(arg1, zoneList)
+    if idx and idx >= 1 and idx <= #zoneList then
+        Logger.log_info("\ax%s [\ay%s\ax]: \ag%s\ax deleted.", listName, zoneKey, zoneList[idx])
+        table.remove(zoneList, idx)
+        self:SetSetting(listName, list)
+    else
+        Logger.log_error("\ar%s Delete: %s was not on the list or is not a valid argument!", listName, tostring(arg1))
+    end
+end
+
+--- Returns the current (or specified) zone's entries from a zone-keyed list setting, always as a table.
+--- @param listName string The setting name of the zone-keyed list.
+--- @param zoneKey string? Optional zone short name (lowercase). Defaults to the current zone.
+--- @param failOk boolean? Passed to GetSetting to suppress the not-found error (for cross-module reads).
+--- @return table entries The zone's entries, or an empty table if none.
+function Config:GetZoneList(listName, zoneKey, failOk)
+    zoneKey = zoneKey or (mq.TLO.Zone.ShortName() or ""):lower()
+    return (self:GetSetting(listName, failOk) or {})[zoneKey] or {}
+end
+
+function Config:ZoneRegistryDefaultZoneKey(list)
+    local zoneFull = (mq.TLO.Zone.Name() or ""):lower()
+    if list[zoneFull] and next(list[zoneFull]) ~= nil then return zoneFull end
+    return (mq.TLO.Zone.ShortName() or ""):lower()
+end
+
+function Config:ZoneRegistryAddEntry(name, listName, zoneKey)
+    name = Strings.TrimSpaces(name)
+    if not name or name == "" then return end
+    local list = self:GetSetting(listName) or {}
+    zoneKey = zoneKey or self:ZoneRegistryDefaultZoneKey(list)
+    list[zoneKey] = list[zoneKey] or {}
+    if list[zoneKey][name] then return end
+    list[zoneKey][name] = {}
+    self:SetSetting(listName, list)
+end
+
+--- Sets a top-level flag on a zone registry entry ('named' or 'deny').
+--- @param name string Mob name (key).
+--- @param listName string The setting name of the zone registry.
+--- @param group string Top-level flag name ('named' or 'deny').
+--- @param value boolean New flag value; stored raw for 'named' (true/false), 'deny' always stores true.
+--- @param zoneKey string? Optional zone key (lowercase). Defaults to the current zone's active section.
+function Config:ZoneRegistrySetFlag(name, listName, group, value, zoneKey)
+    name = Strings.TrimSpaces(name)
+    if not name or name == "" then return end
+    local list = self:GetSetting(listName) or {}
+    zoneKey = zoneKey or self:ZoneRegistryDefaultZoneKey(list)
+    list[zoneKey] = list[zoneKey] or {}
+    list[zoneKey][name] = list[zoneKey][name] or {}
+    if group == 'named' then
+        list[zoneKey][name].named = value
+    elseif group == 'deny' then
+        list[zoneKey][name].deny = true
+    end
+    self:SetSetting(listName, list)
+end
+
+--- Sets a sub-flag inside a group ('resists' or 'immunities') on a zone registry entry.
+--- @param name string Mob name (key).
+--- @param listName string The setting name of the zone registry.
+--- @param group string Sub-table name ('resists' or 'immunities').
+--- @param key string Element/effect key within the group (e.g. 'Fire', 'Slow').
+--- @param value boolean New flag value (nil clears the sub-flag).
+--- @param zoneKey string? Optional zone key (lowercase). Defaults to the current zone's active section.
+function Config:ZoneRegistrySetSubFlag(name, listName, group, key, value, zoneKey)
+    name = Strings.TrimSpaces(name)
+    if not name or name == "" then return end
+    local list = self:GetSetting(listName) or {}
+    zoneKey = zoneKey or self:ZoneRegistryDefaultZoneKey(list)
+    list[zoneKey] = list[zoneKey] or {}
+    list[zoneKey][name] = list[zoneKey][name] or {}
+    local entry = list[zoneKey][name]
+    entry[group] = entry[group] or {}
+    entry[group][key] = value and true or nil
+    if not next(entry[group]) then entry[group] = nil end
+    self:SetSetting(listName, list)
+end
+
+--- Clears a flag on a zone registry entry. Early-returns (no SetSetting) when the entry doesn't exist,
+--- avoiding redundant OnChange/broadcast cycles on no-op clears.
+--- For group='named' or 'deny', that flag is cleared. For other groups, subKey must be provided.
+--- @param name string Mob name (key).
+--- @param listName string The setting name of the zone registry.
+--- @param group string Top-level flag or sub-table name ('named'/'deny'/'elementalImmunities'/'statusImmunities').
+--- @param subKey string? Sub-key within the group (required when group is 'elementalImmunities' or 'statusImmunities').
+--- @param zoneKey string? Optional zone key (lowercase). Defaults to the current zone's active section.
+function Config:ZoneRegistryClearFlag(name, listName, group, subKey, zoneKey)
+    name = Strings.TrimSpaces(name)
+    if not name or name == "" then return end
+    local list = self:GetSetting(listName) or {}
+    zoneKey = zoneKey or self:ZoneRegistryDefaultZoneKey(list)
+    local zoneTbl = list[zoneKey]
+    if not zoneTbl then return end
+    local entry = zoneTbl[name]
+    if not entry then return end
+    if group == 'named' then
+        entry.named = nil
+    elseif group == 'deny' then
+        entry.deny = nil
+    elseif subKey then
+        if entry[group] then
+            entry[group][subKey] = nil
+            if not next(entry[group]) then entry[group] = nil end
+        end
+    end
+    self:SetSetting(listName, list)
+end
+
+function Config:GetCommandHandlers()
+    return { module = "Config", CommandHandlers = self.CommandHandlers or {}, }
+end
+
+function Config:GetFAQ()
+    return self.FAQ or {}
+end
+
+function Config:GetLastHighlightChangeTime()
+    return self.lastHighlightTime or 0
+end
+
+function Config:IsModuleHighlighted(module)
+    self.TempSettings.HighlightedModules = self.TempSettings.HighlightedModules or Set.new({})
+    return self.TempSettings.HighlightedModules:contains(module)
+end
+
+function Config:ClearAllHighlightedModules()
+    self.TempSettings.HighlightedModules = Set.new({})
+    self.lastHighlightTime = Globals.GetTimeSeconds()
+end
+
+function Config:OpenOptionsUIAndHighlightModule(module)
+    self:SetSetting("EnableOptionsUI", true)
+    self:HighlightModule(module)
+end
+
+function Config:HighlightModule(module)
+    -- only allow for 1 at a time for now but later we might enhance this.
+    self.TempSettings.HighlightedModules = Set.new({})
+    self.TempSettings.HighlightedModules:add(module)
+    self.lastHighlightTime = Globals.GetTimeSeconds()
+end
+
+function Config:UnhighlightModule(module)
+    self.TempSettings.HighlightedModules = self.TempSettings.HighlightedModules or Set.new({})
+    self.TempSettings.HighlightedModules:remove(module)
+    self.lastHighlightTime = Globals.GetTimeSeconds()
+end
+
+---@param config string
+---@param value any
+---@return boolean
+function Config:HandleBind(config, value)
+    local handled = false
+
+    if not config or config:lower() == "show" or config:len() == 0 then
+        self:UpdateCommandHandlers()
+
+        local allModules = {}
+        for name, _ in pairs(self.moduleDefaultSettings) do
+            if name ~= "Core" then
+                table.insert(allModules, name)
+            end
+        end
+        table.sort(allModules)
+        table.insert(allModules, 1, "Core")
+
+        local sortedKeys = {}
+        for c, _ in pairs(self.CommandHandlers or {}) do
+            table.insert(sortedKeys, c)
+        end
+        table.sort(sortedKeys)
+
+        local sortedCategories = {}
+        for c, d in pairs(self.CommandHandlers or {}) do
+            sortedCategories[d.subModule] = sortedCategories[d.subModule] or {}
+            if not Tables.TableContains(sortedCategories[d.subModule], d.category) then
+                table.insert(sortedCategories[d.subModule], d.category)
+            end
+        end
+        for _, subModuleTable in pairs(sortedCategories) do
+            table.sort(subModuleTable)
+        end
+
+        for _, subModuleName in ipairs(allModules) do
+            local printHeader = true
+            for _, c in ipairs(sortedCategories[subModuleName] or {}) do
+                local printCategory = true
+                for _, k in ipairs(sortedKeys) do
+                    local d = self.CommandHandlers[k]
+                    if d.subModule == subModuleName and d.category == c then
+                        if printHeader then
+                            printf("\n\ag%s\aw Settings\n------------", subModuleName)
+                            printHeader = false
+                        end
+                        if printCategory then
+                            printf("\n\aoCategory: %s\aw", c)
+                            printCategory = false
+                        end
+                        if (value or ""):len() > 0 and
+                            d.name:lower():find(value:lower()) == nil and
+                            (d.usage or ""):lower():find(value:lower()) == nil and
+                            (d.about or ""):lower():find(value:lower()) == nil then
+                            -- skip
+                        else
+                            printf("\am%-20s\aw - \atUsage: \ay%s\aw | %s", d.name,
+                                Strings.PadString(d.usage, 100, false), d.about)
+                        end
+                    end
+                end
+            end
+        end
+        return true
+    end
+
+    if self.CommandHandlers[config:lower()] ~= nil then
+        Config:SetSetting(config, value)
+        handled = true
+    else
+        Logger.log_error("\at%s\aw - \arNot a valid config setting!\ax", config)
+    end
+
+    return handled
+end
+
+---@param config string
+---@param value any
+---@return boolean
+function Config:HandleTempSet(config, value)
+    local handled = false
+
+    if not config or config:lower() == "show" or config:len() == 0 then
+        self:HandleBind("show", value)
+        return true
+    end
+
+    if self.CommandHandlers[config:lower()] ~= nil then
+        Config:SetTempSetting(config, value)
+        handled = true
+    else
+        Logger.log_error("\at%s\aw - \arNot a valid config setting!\ax", config)
+    end
+
+    return handled
+end
+
+---@return number
+function Config:GetMainOpacity()
+    return tonumber((self:GetSetting('BgOpacity') or 100) / 100) or 1.0
+end
+
+--- Determines if the priority follow condition is met.
+--- @return boolean True if the priority follow condition is met, false otherwise.
+function Config.ShouldPriorityFollow()
+    local chaseTarget = Config:GetSetting('ChaseTarget', true) or "NoOne"
+
+    if chaseTarget == mq.TLO.Me.CleanName() then return false end
+
+    if Config:GetSetting('PriorityFollow') and Config:GetSetting('ChaseOn') then
+        local chaseSpawn = mq.TLO.Spawn("pc =" .. chaseTarget)
+
+        if (mq.TLO.Me.Moving() or (chaseSpawn() and (chaseSpawn.Distance() or 0) > Config:GetSetting('ChaseDistance'))) then
+            return true
+        end
+    end
+
+    return false
+end
+
+function Config.CacheCustomColors()
+    for k, v in pairs(Globals.Constants.DefaultColors) do
+        Globals.Constants.Colors[k] = Tables.TableToImVec4(Config:GetSetting(k)) or v
+    end
+
+    -- Add here for completeness even though it is a duplicate of BasicColors
+    for c, v in pairs(Globals.Constants.BasicColors) do
+        Globals.Constants.Colors[c] = v
+    end
+
+    for i, v in ipairs(Globals.Constants.ConColors) do
+        Globals.Constants.ConColorsNameToVec4[v:upper()] = Globals.Constants.Colors[Globals.Constants.ConColors[i]:gsub(" ", "")] or Globals.Constants.Colors.White
+    end
+end
+
+function Config:ConvertToDb()
+    -- build the ordered module list from ModuleOrder, appending Core first and both loot modules
+    local moduleNames = { "Core", }
+    for _, name in ipairs(Modules.ModuleOrder) do
+        table.insert(moduleNames, name)
+    end
+    table.insert(moduleNames, "LootNScoot")
+    table.insert(moduleNames, "SmartLoot")
+
+    local settingCount = 0
+
+    for _, name in ipairs(moduleNames) do
+        local fileName   = name == "Core" and "RGMercs" or name
+        local configFile = Config.GetConfigFileName(fileName)
+
+        if not Files.file_exists(configFile) then
+            Logger.log_verbose("\ayConvertToDb: no config file found for module \ay%s\ay, skipping.", name)
+        else
+            local loaded, err = loadfile(configFile)
+            if not loaded or err then
+                Logger.log_warn("\ayConvertToDb: could not parse file %s: %s", configFile, tostring(err))
+            else
+                local fileSettings = loaded() or {}
+                Logger.log_verbose("\agConvertToDb: loaded file \at%s\ag for module \ay%s", configFile, name)
+                for setting, value in pairs(fileSettings) do
+                    local existing = self.Db:getValue(Globals.CurServer, Globals.CurLoadedChar, Globals.CurLoadedClass, name, setting)
+                    if existing == nil then
+                        self.Db:setValue(Globals.CurServer, Globals.CurLoadedChar, Globals.CurLoadedClass, name, setting, value)
+                        settingCount = settingCount + 1
+                    end
+                end
+            end
+        end
+    end
+
+    Logger.log_info("\agConverted \ay%d \agsettings across \ay%d \agmodules from files to the database.", settingCount, #moduleNames)
+end
+
+function Config:DbConsistencyCheck()
+    local settingCount = 0
+    local moduleCount = 0
+    self.DbConsistencyCheckPass = true
+
+    -- Check 1: db vs in-memory values
+    for module, defaults in pairs(self.moduleDefaultSettings) do
+        moduleCount = moduleCount + 1
+        for setting, _ in pairs(defaults) do
+            local value   = self:GetSetting(setting)
+            local dbValue = Config.Db:getValue(Globals.CurServer, Globals.CurLoadedChar, Globals.CurLoadedClass, module, setting)
+            if type(dbValue) == "table" and type(value) == "table" then
+                if not Tables.AreTablesEqual(dbValue, value) then
+                    Logger.log_error("\arInconsistency found for %s \aw- \atDB Value\aw: \ag%s\aw, \atIn-Memory Value: \ag%s\aw",
+                        setting, Strings.TableToString(dbValue), Strings.TableToString(value))
+                    Config.DbConsistencyCheckPass = false
+                end
+            elseif dbValue ~= value then
+                Logger.log_error("\arInconsistency found for %s \aw- \atDB Value\aw: \ag%s\aw, \atIn-Memory Value: \ag%s\aw",
+                    setting, tostring(dbValue), tostring(value))
+                Config.DbConsistencyCheckPass = false
+            end
+            settingCount = settingCount + 1
+        end
+    end
+
+    -- Check 2: db vs legacy config files (same module list as ConvertToDb)
+    local moduleNames = { "Core", }
+    for _, name in ipairs(Modules.ModuleOrder) do
+        table.insert(moduleNames, name)
+    end
+    table.insert(moduleNames, "LootNScoot")
+    table.insert(moduleNames, "SmartLoot")
+
+    for _, name in ipairs(moduleNames) do
+        local fileName    = name == "Core" and "RGMercs" or name
+        local configFile  = Config.GetConfigFileName(fileName)
+        local loaded, err = loadfile(configFile)
+        if loaded and not err then
+            local fileSettings = loaded() or {}
+            for setting, fileValue in pairs(fileSettings) do
+                local dbValue = Config.Db:getValue(Globals.CurServer, Globals.CurLoadedChar, Globals.CurLoadedClass, name, setting)
+                if dbValue == nil then
+                    Logger.log_error("\arFile vs DB: module \ay%s\ar setting \ay%s\ar exists in file but is missing from db.", name, setting)
+                    Config.DbConsistencyCheckPass = false
+                elseif type(fileValue) == "table" and type(dbValue) == "table" then
+                    if not Tables.AreTablesEqual(fileValue, dbValue) then
+                        Logger.log_error("\arFile vs DB: module \ay%s\ar setting \ay%s\ar value mismatch.\aw File: \ag%s\aw DB: \ag%s",
+                            name, setting, Strings.TableToString(fileValue), Strings.TableToString(dbValue))
+                        Config.DbConsistencyCheckPass = false
+                    end
+                elseif fileValue ~= dbValue then
+                    Logger.log_error("\arFile vs DB: module \ay%s\ar setting \ay%s\ar value mismatch.\aw File: \ag%s\aw DB: \ag%s",
+                        name, setting, tostring(fileValue), tostring(dbValue))
+                    Config.DbConsistencyCheckPass = false
+                end
+            end
+        end
+    end
+
+    Logger.log_info("\agDatabase consistency check complete. Found \ay%d \agsettings in the database for this character.", settingCount)
+
+    return Config.DbConsistencyCheckPass
+end
+
+function Config:GetAllModuleSettingsFromDb(module)
+    local out = self.Db:getAll(Globals.CurServer, Globals.CurLoadedChar, Globals.CurLoadedClass, module) or {}
+    for k, v in pairs(self.Db:getServerAll(Globals.ServerEnv, module) or {}) do
+        out[k] = v
+    end
+    return out
+end
+
+function Config:CharacterExistsInDb()
+    return self.Db:getCharacterId(Globals.CurServer, Globals.CurLoadedChar) ~= nil
+end
+
+function Config:DbWritesPending()
+    return self.Db:pendingWrites() > 0
+end
+
+function Config:FlushDB()
+    self.Db:flushQueue()
+end
+
+function Config:UpdateDbTelemetry()
+    self.Db:updateTelemetryGraphs()
+end
+
+function Config:Shutdown()
+    self.Db:close()
+end
+
+return Config

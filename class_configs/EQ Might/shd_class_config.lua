@@ -1,0 +1,1685 @@
+local mq           = require('mq')
+local Set          = require('mq.set')
+local Casting      = require("utils.casting")
+local Combat       = require("utils.combat")
+local Config       = require('utils.config')
+local Core         = require("utils.core")
+local Globals      = require("utils.globals")
+local ItemManager  = require("utils.item_manager")
+local Logger       = require("utils.logger")
+local Targeting    = require("utils.targeting")
+local Ui           = require("utils.ui")
+
+--todo: add a LOT of tooltips or scrap them entirely. Hopefully the former.
+local Tooltips     = {
+    Mantle              = "Spell Line: Melee Absorb Proc",
+    Carapace            = "Spell Line: Melee Absorb Proc",
+    CombatEndRegen      = "Discipline Line: Endurance Regen (In-Combat Useable)",
+    EndRegen            = "Discipline Line: Endurance Regen (Out of Combat)",
+    Blade               = "Ability Line: Double 2HS Attack w/ Accuracy Mod",
+    Crimson             = "Disicpline Line: Triple Attack w/ Accuracy Mod",
+    MeleeMit            = "Discipline Line: Absorb Incoming Dmg",
+    BlockDisc           = "Discipline: Shield Block Chance 98-99%",
+    LeechCurse          = "Discipline: Melee LifeTap w/ Increase Hit Chance",
+    UnholyAura          = "Discipline: Increase LifeTap Spell Damage",
+    Guardian            = "Discipline: Melee Mitigation w/ Defensive LifeTap & Lowered Melee DMG Output",
+    PetSpell            = "Spell Line: Summons SK Pet",
+    PetHaste            = "Spell Line: Haste Buff for SK Pet",
+    Shroud              = "Spell Line: Add Melee LifeTap Proc",
+    Horror              = "Spell Line: Proc HP Return",
+    Mental              = "Spell Line: Proc Mana Return",
+    Skin                = "Spell Line: Melee Absorb Proc",
+    Demeanor            = "Spell Line: Add LifeTap Proc Buff on Killshot",
+    HealBurn            = "Spell Line: Add Hate Proc on Incoming Spell Damage",
+    CloakHP             = "Spell Line: Increase HP and Stacking DS",
+    Covenant            = "Spell Line: Increase Mana Regen + Ultravision / Decrease HP Per Tick",
+    CallAtk             = "Spell Line: Increase Attack / Decrease HP Per Tick",
+    AETaunt             = "Spell Line: PBAE Hate Increase + Taunt",
+    PoisonDot           = "Spell Line: Poison Dot",
+    SpearNuke           = "Spell Line: Instacast Disease Nuke",
+    BondTap             = "Spell Line: LifeTap DOT",
+    DireTap             = "Spell Line: LifeTap",
+    LifeTap             = "Spell Line: LifeTap",
+    BiteTap             = "Spell Line: LifeTap + ManaTap",
+    ForPower            = "Spell Line: Hate Increase + Hate Increase DOT + AC Buff 'BY THE POWER OF GRAYSKULL, I HAVE THE POWER -- HE-MAN'",
+    Terror              = "Spell Line: Hate Increase + Taunt",
+    TempHP              = "Spell Line: Temporary Hitpoints (Decrease per Tick)",
+    Dicho               = "Spell Line: Hate Increase + LifeTap",
+    PowerTapAC          = "Spell Line: AC Tap (highest available)",
+    PowerTapAtk         = "Spell Line: Attack Tap",
+    HarmshieldSpell     = "Spell: Harmshield",
+    SnareDot            = "Spell Line: Snare + HP DOT",
+    Acrimony            = "Spell Increase: Aggrolock + LifeTap DOT + Hate Generation",
+    SpiteStrike         = "Spell Line: LifeTap + Caster 1H Blunt Increase + Target Armor Decrease",
+    ReflexStrike        = "Ability: Triple 2HS Attack + HP Increase",
+    DireDot             = "Spell Line: DOT + AC Decrease + Strength Decrease",
+    AllianceNuke        = "Spell Line: Alliance (Requires Multiple of Same Class) - Increase Spell Damage Taken by Target + Large LifeTap",
+    InfluenceDisc       = "Ability Line: Increase AC + Absorb Damage + Melee Proc (LifeTap + Max HP Increase)",
+    DLUA                = "AA: Cast Highest Level of Scribed Buffs (Shroud, Horror, Drape, Demeanor, Skin, Covenant, CallATK)",
+    DLUB                = "AA: Cast Highest Level of Scribed Buffs (Shroud, Mental, Drape, Demeanor, Skin, Covenant, CallATK)",
+    HarmTouch           = "AA: Harms Target HP",
+    ThoughtLeech        = "AA: Harms Target HP + Harms Target Mana",
+    VisageOfDeath       = "Spell: Increases Melee Hit Dmg + Illusion",
+    LeechTouch          = "AA: LifeTap Touch",
+    Tvyls               = "Spell: Triple 2HS Attack + % Melee Damage Increase on Target",
+    ActivateShield      = "Activate 'Shield' if set in Bandolier",
+    Activate2HS         = "Activate '2HS' if set in Bandolier",
+    ExplosionOfHatred   = "Spell: Targeted AE Hatred Increase",
+    ExplosionOfSpite    = "Spell: Targeted PBAE Hatred Increase",
+    Taunt               = "Ability: Increases Hatred to 100% + 1",
+    EncroachingDarkness = "Ability: Snare + HP DOT",
+    Epic                = 'Item: Casts Epic Weapon Ability',
+    ViciousBiteOfChaos  = "Spell: Duration LifeTap + Mana Return",
+    Bash                = "Use Bash Ability",
+    Slam                = "Use Slam Ability",
+    HateBuff            = "Spell/AA: Increase Hate Generation",
+}
+
+-- LifeTap line (EQ Might). Highest Available: full list. Specific pick: that spell only.
+local lifeTapSpellList = {
+    "Touch of the Devourer", -- Level 70
+    "Leech Soul",            -- Level 68 EQM Custom
+    "Touch of Inruku",       -- Level 67
+    "Touch of Innoruuk",     -- Level 65
+    "Touch of Volatis",      -- Level 62
+    "Drain Soul",            -- Level 60
+    "Drain Spirit",          -- Level 55
+    "Spirit Tap",            -- Level 51
+    "Siphon Life",           -- Level 47
+    "Life Leech",            -- Level 44
+    "Lifedraw",              -- Level 25
+    "Lifespike",             -- Level 15
+    "Lifetap",               -- Level 8
+}
+
+-- 1 = Highest Available, 2 = None (slot unused), 3+ = exact spell
+local lifeTapSpellComboOptions = { 'Highest Available', 'None', }
+for _, spellName in ipairs(lifeTapSpellList) do
+    table.insert(lifeTapSpellComboOptions, spellName)
+end
+
+local LIFETAP_CHOICE_HIGHEST = 1
+local LIFETAP_CHOICE_NONE = 2
+
+local function copySpellList(list)
+    local copy = {}
+    for i, spellName in ipairs(list) do
+        copy[i] = spellName
+    end
+    return copy
+end
+
+local function IsLifeTapSlotEnabled(settingName)
+    return (Config:GetSetting(settingName) or LIFETAP_CHOICE_HIGHEST) ~= LIFETAP_CHOICE_NONE
+end
+
+local _ClassConfig
+
+local function ApplyLifeTapSpellChoice(setName, settingName)
+    local choice = Config:GetSetting(settingName) or LIFETAP_CHOICE_HIGHEST
+    if type(choice) ~= "number" or choice < 1 or choice > #lifeTapSpellComboOptions then
+        choice = LIFETAP_CHOICE_HIGHEST
+    end
+
+    if choice == LIFETAP_CHOICE_NONE then
+        _ClassConfig.AbilitySets[setName] = {}
+        return
+    end
+
+    if choice == LIFETAP_CHOICE_HIGHEST then
+        _ClassConfig.AbilitySets[setName] = copySpellList(lifeTapSpellList)
+        return
+    end
+
+    -- Exact selection only (same pattern as ENC MezSpellChoice).
+    _ClassConfig.AbilitySets[setName] = { lifeTapSpellList[choice - 2], }
+end
+
+local function ApplyLifeTapSpellChoices()
+    ApplyLifeTapSpellChoice('LifeTap', 'LifeTapSpellChoice')
+    ApplyLifeTapSpellChoice('LifeTap2', 'LifeTap2SpellChoice')
+    ApplyLifeTapSpellChoice('LifeTap3', 'LifeTap3SpellChoice')
+end
+
+_ClassConfig = {
+    -- Added low level proc self-buffs, separated the proc lines by buff slot
+    _version          = "2.8 - EQ Might",
+    _author           = "Algar, Derple",
+    ['ModeChecks']    = {
+        IsTanking = function() return Core.IsModeActive("Tank") end,
+        IsRezing = function() return Core.GetResolvedActionMapItem('RezStaff') ~= nil and (Config:GetSetting('DoBattleRez') or not Targeting.HasXTHaters()) end,
+    },
+    -- Apply LifeTap spell picks before GetBestSpell resolves AbilitySets / gem loadout.
+    ['BeforeResolveActions'] = function()
+        ApplyLifeTapSpellChoices()
+    end,
+    ['Rez']           = {
+        ['Combat']   = {
+            { type = "Item", name = "RezStaff", },
+        },
+        ['Downtime'] = {
+            { type = "Item", name = "RezStaff", },
+        },
+    },
+    ['Modes']         = {
+        'Tank',
+        'DPS',
+    },
+    ['PetPosition']   = {
+        SummonAA   = function() return Casting.CanUseAA("Summon Companion") and "Summon Companion" end,
+        RelocateAA = function() return Casting.CanUseAA("Companion's Relocation") and "Companion's Relocation" end,
+    },
+    ['Themes']        = {
+        ['Tank'] = {
+            { element = ImGuiCol.TitleBgActive,    color = { r = 0.5, g = 0.05, b = 0.05, a = .8, }, },
+            { element = ImGuiCol.TableHeaderBg,    color = { r = 0.5, g = 0.05, b = 0.05, a = .8, }, },
+            { element = ImGuiCol.Tab,              color = { r = 0.2, g = 0.05, b = 0.05, a = .8, }, },
+            { element = ImGuiCol.TabSelected,      color = { r = 0.5, g = 0.05, b = 0.05, a = .8, }, },
+            { element = ImGuiCol.TabHovered,       color = { r = 0.5, g = 0.05, b = 0.05, a = 1.0, }, },
+            { element = ImGuiCol.Header,           color = { r = 0.2, g = 0.05, b = 0.05, a = .8, }, },
+            { element = ImGuiCol.HeaderActive,     color = { r = 0.5, g = 0.05, b = 0.05, a = .8, }, },
+            { element = ImGuiCol.HeaderHovered,    color = { r = 0.5, g = 0.05, b = 0.05, a = 1.0, }, },
+            { element = ImGuiCol.FrameBgHovered,   color = { r = 0.5, g = 0.05, b = 0.05, a = 0.7, }, },
+            { element = ImGuiCol.Button,           color = { r = 0.3, g = 0.05, b = 0.05, a = .8, }, },
+            { element = ImGuiCol.ButtonActive,     color = { r = 0.5, g = 0.05, b = 0.05, a = .8, }, },
+            { element = ImGuiCol.ButtonHovered,    color = { r = 0.5, g = 0.05, b = 0.05, a = 1.0, }, },
+            { element = ImGuiCol.TextSelectedBg,   color = { r = 0.2, g = 0.05, b = 0.05, a = .1, }, },
+            { element = ImGuiCol.FrameBg,          color = { r = 0.2, g = 0.05, b = 0.05, a = .8, }, },
+            { element = ImGuiCol.SliderGrab,       color = { r = 1.0, g = 0.05, b = 0.05, a = .8, }, },
+            { element = ImGuiCol.SliderGrabActive, color = { r = 1.0, g = 0.05, b = 0.05, a = .9, }, },
+            { element = ImGuiCol.FrameBgActive,    color = { r = 0.5, g = 0.05, b = 0.05, a = 1.0, }, },
+        },
+        ['DPS'] = {
+            { element = ImGuiCol.TitleBgActive,    color = { r = 0.5, g = 0.05, b = 0.05, a = .8, }, },
+            { element = ImGuiCol.TableHeaderBg,    color = { r = 0.5, g = 0.05, b = 0.05, a = .8, }, },
+            { element = ImGuiCol.Tab,              color = { r = 0.2, g = 0.05, b = 0.05, a = .8, }, },
+            { element = ImGuiCol.TabSelected,      color = { r = 0.5, g = 0.05, b = 0.05, a = .8, }, },
+            { element = ImGuiCol.TabHovered,       color = { r = 0.5, g = 0.05, b = 0.05, a = 1.0, }, },
+            { element = ImGuiCol.Header,           color = { r = 0.2, g = 0.05, b = 0.05, a = .8, }, },
+            { element = ImGuiCol.HeaderActive,     color = { r = 0.5, g = 0.05, b = 0.05, a = .8, }, },
+            { element = ImGuiCol.HeaderHovered,    color = { r = 0.5, g = 0.05, b = 0.05, a = 1.0, }, },
+            { element = ImGuiCol.FrameBgHovered,   color = { r = 0.5, g = 0.05, b = 0.05, a = 0.7, }, },
+            { element = ImGuiCol.Button,           color = { r = 0.3, g = 0.05, b = 0.05, a = .8, }, },
+            { element = ImGuiCol.ButtonActive,     color = { r = 0.5, g = 0.05, b = 0.05, a = .8, }, },
+            { element = ImGuiCol.ButtonHovered,    color = { r = 0.5, g = 0.05, b = 0.05, a = 1.0, }, },
+            { element = ImGuiCol.TextSelectedBg,   color = { r = 0.2, g = 0.05, b = 0.05, a = .1, }, },
+            { element = ImGuiCol.FrameBg,          color = { r = 0.2, g = 0.05, b = 0.05, a = .8, }, },
+            { element = ImGuiCol.SliderGrab,       color = { r = 1.0, g = 0.05, b = 0.05, a = .8, }, },
+            { element = ImGuiCol.SliderGrabActive, color = { r = 1.0, g = 0.05, b = 0.05, a = .9, }, },
+            { element = ImGuiCol.FrameBgActive,    color = { r = 0.5, g = 0.05, b = 0.05, a = 1.0, }, },
+        },
+    },
+    ['ItemSets']      = {
+        ['RezStaff'] = {
+            "Legendary Fabled Staff of Forbidden Rites",
+            "Fabled Staff of Forbidden Rites",
+            "Legendary Staff of Forbidden Rites",
+        },
+        ['Epic'] = {
+            "Innoruuk's Dark Wrath", -- 2.1, EQM custom
+            "Innoruuk's Dark Blessing",
+            "Innoruuk's Voice",
+        },
+        ['OoW_Chest'] = {
+            "Heartstiller's Mail Chestguard",
+            "Duskbringer's Plate Chestguard of the Hateful",
+        },
+    },
+    ['AbilitySets']   = {
+        --Laz spells to look into: Fickle Shadows
+        ['Mantle'] = {
+            "Soul Carapace",              -- Level 71
+            "Ancient: Guard of Chivalry", -- Level 68 EQM Custom
+            "Soul Shield",                -- Level 67
+            "Soul Guard",                 -- Level 61
+            "Ichor Guard",                -- Level 56 Timer 5
+            "Squire Guard",               -- Level 40 EQM Custom
+        },
+        ['BlockDisc'] = {
+            "Deflection Discipline", -- Level 59
+        },
+
+        ['LeechCurse'] = { 'Leechcurse Discipline', },  -- Level 60
+
+        ['UnholyAura'] = { 'Unholy Aura Discipline', }, -- Level 55
+
+        ['PetSpell'] = {
+            "Son of Decay",   -- Level 68
+            "Invoke Death",   -- Level 64
+            "Cackling Bones", -- Level 58
+            "Malignant Dead", -- Level 52
+            "Summon Dead",    -- Level 46
+            "Animate Dead",   -- Level 38
+            "Restless Bones", -- Level 30
+            "Convoke Shadow", -- Level 22
+            "Bone Walk",      -- Level 14
+            "Leering Corpse", -- Level 7
+        },
+        ['PetHaste'] = {
+            "Amplify Death",           -- Level 71
+            "Rune of Decay",           -- Level 69
+            "Augmentation of Death",   -- Level 64
+            "Augment Death",           -- Level 60
+            "Strengthen Death",        -- Level 29
+        },
+        ['Shroud'] = {                 -- HP Tap Proc, Buff Slot 1
+            "Shroud of the Nightborn", -- Level 71
+            "Shroud of Discord",       -- Level 67
+            "Black Shroud",            -- Level 65
+            "Shroud of Chaos",         -- Level 63
+            "Shroud of Death",         -- Level 55
+            "Scream of Death",         -- Level 37
+            "Vampiric Embrace",        -- Level 22
+        },
+        ['Horror'] = {                 -- HP Tap Proc, Buff Slot 2
+            "Marrowthirst Horror",     -- Level 70
+        },
+        ['Mental'] = {                 -- Mana Tap Proc, Buff Slot 1
+            "Mental Horror",           -- Level 65
+            "Mental Corruption",       -- Level 52
+        },
+        ['Skin'] = {
+            "Decrepit Skin", -- Level 70
+        },
+        ['HarmshieldSpell'] = {
+            "Harmshield", -- Level 20
+        },
+        ['CloakHP'] = {
+            "Cloak of Discord",    -- Level 70
+            "Cloak of Luclin",     -- Level 65
+            "Cloak of the Akheva", -- Level 60
+        },
+        ['CallAtk'] = {
+            "Call of Darkness", -- Level 54
+        },
+        ['AETaunt'] = {
+            "Dread Gaze", -- Level 69
+        },
+        ['PoisonDot'] = {
+            "Blood of the Blacktalon", -- Level 71
+            "Blood of Inruku",         -- Level 68
+            "Blood of Discord",        -- Level 66
+            "Blood of Hate",           -- Level 63
+            "Blood of Pain",           -- Level 41
+        },
+        ['SpearNuke'] = {
+            "Spear of Muram",   -- Level 69
+            "Miasmic Spear",    -- Level 65
+            "Spear of Decay",   -- Level 64
+            "Spear of Plague",  -- Level 54
+            "Spear of Pain",    -- Level 48
+            "Spear of Disease", -- Level 34
+            "Spike of Disease", -- Level 1
+        },
+        ['BondTap'] = {
+            "Bond of the Blacktalon", -- Level 70
+            "Bond of Inruku",         -- Level 66
+            "Bond of Death",          -- Level 62
+            "Vampiric Curse",         -- Level 57
+        },
+        ['LifeTap'] = copySpellList(lifeTapSpellList),
+        ['LifeTap2'] = copySpellList(lifeTapSpellList),
+        ['LifeTap3'] = copySpellList(lifeTapSpellList),
+        -- ['TouchTap'] = {
+        --     "Touch of Draygun",
+        -- },
+        ['BiteTap'] = {               -- Timer 2
+            "Blacktalon Bite",        -- Level 70
+            "Inruku's Bite",          -- Level 67
+            "Ancient: Bite of Chaos", -- Level 65
+            "Zevfeer's Bite",         -- Level 62
+        },
+        ['AncientBite'] = {           -- Timer 4
+            "Ancient: Bite of Muram", -- Level 70
+        },
+        ['Terror'] = {
+            "Terror of Vergalid", -- Level 70
+            "Terror of Discord",  -- Level 67
+            "Terror of Thule",    -- Level 63
+            "Terror of Terris",   -- Level 59
+            "Terror of Death",    -- Level 53
+            "Terror of Shadows",  -- Level 42
+            "Terror of Darkness", -- Level 33
+        },
+        ['Terror2'] = {
+            "Terror of Vergalid", -- Level 70
+            "Terror of Discord",  -- Level 67
+            "Terror of Thule",    -- Level 63
+            "Terror of Terris",   -- Level 59
+            "Terror of Death",    -- Level 53
+            "Terror of Shadows",  -- Level 42
+            "Terror of Darkness", -- Level 33
+        },
+        ['Terror3'] = {
+            "Terror of Vergalid", -- Level 70
+            "Terror of Discord",  -- Level 67
+            "Terror of Thule",    -- Level 63
+            "Terror of Terris",   -- Level 59
+            "Terror of Death",    -- Level 53
+            "Terror of Shadows",  -- Level 42
+            "Terror of Darkness", -- Level 33
+        },
+        ['PowerTapAC'] = {
+            "Theft of Agony",  -- Level 70
+            "Theft of Pain",   -- Level 68
+            "Aura of Pain",    -- Level 63
+            "Torrent of Pain", -- Level 56
+            "Shroud of Pain",  -- Level 50
+            "Scream of Pain",  -- Level 23
+        },
+        ['PowerTapAtk'] = {
+            "Theft of Hate",   -- Level 70
+            "Aura of Hate",    -- Level 65
+            "Torrent of Hate", -- Level 54
+            "Shroud of Hate",  -- Level 35
+            "Scream of Hate",  -- Level 15
+        },
+        ['SnareDot'] = {
+            "Festering Darkness", -- Level 61
+            "Cascading Darkness", -- Level 59
+            "Dooming Darkness",   -- Level 44
+            "Engulfing Darkness", -- Level 20
+            "Clinging Darkness",  -- Level 11
+        },
+        ['DireDot'] = {
+            "Dark Constriction", -- Level 66
+            "Asystole",          -- Level 60
+            "Heart Flutter",     -- Level 36
+            "Disease Cloud",     -- Level 5
+        },
+        ['HateBuff'] = {         --9 minute reuse makes these somewhat ridiculous to gem on the fly.
+            "Voice of Thule",    -- Level 65 12% hate
+            "Voice of Terris",   -- Level 60 10% hate
+            "Voice of Death",    -- Level 55 6% hate
+            "Voice of Shadows",  -- Level 46 4% hate
+            "Voice of Darkness", -- Level 39 2% hate
+        },
+        ['BladeDisc'] = {
+            "Whirlwind Blade",    -- Level 65
+            "Mayhem Blade",       -- Level 52 EQM Custom
+        },
+        ['Minionskin'] = {        --EQM Custom: HP/Regen/mitigation (May need to block druid HP buff line on pet)
+            "Major Minionskin",   -- Level 66 EQM Custom
+            "Greater Minionskin", -- Level 56 EQM Custom
+            "Minionskin",         -- Level 43 EQM Custom
+            "Lesser Minionskin",  -- not castable for SHD EQM Custom
+        },
+        ['Protective'] = {
+            "Protective Discipline",       -- Level 69 EQM Custom
+            "Protective Surge Discipline", -- Level 45 EQM Custom
+        },
+        ['Steelwrath'] = {
+            "Steelwrath Discipline", -- Level 68 EQM Custom
+        },
+        ['ForPower'] = {
+            "Challenge for Power", -- Level 71
+        },
+        -- pact of decay ... is this a lich? level 69
+    },
+    ['AASets']        = {
+        ['Spire'] = {
+            "Fundament: Second Spire of the Reavers",
+            "Fundament: First Spire of the Reavers",
+        },
+    },
+    ['Helpers']       = {
+        --function to determine if we have enough mobs in range to use a defensive disc
+        DefensiveDiscCheck = function(printDebug)
+            local occupiedCount = mq.TLO.Me.XTarget() or 0
+            if occupiedCount < Config:GetSetting('DiscCount') then return false end
+            local haters = Set.new({})
+            local slotCount = mq.TLO.Me.XTargetSlots() or 0
+            for i = 1, slotCount do
+                local xtarg = mq.TLO.Me.XTarget(i)
+                if Targeting.IsXTHater(xtarg) and (xtarg.Distance() or 999) <= 30 then
+                    if printDebug then
+                        Logger.log_verbose("DefensiveDiscCheck(): XT(%d) Counting %s(%d) as a hater in range.", i, xtarg.CleanName() or "None", xtarg.ID())
+                    end
+                    haters:add(xtarg.ID())
+                end
+                if #haters:toList() >= Config:GetSetting('DiscCount') then return true end -- no need to keep counting once this threshold has been reached
+            end
+            return false
+        end,
+        --function to space out Epic and Omens Chest with Mortal Coil old-school swarm style. Epic has an override condition to fire anyway on named.
+        LeechCheck = function(self)
+            local LeechEffects = { "Leechcurse Discipline", "Mortal Coil", "Lich Sting Recourse", "Reaper Strike Recourse", "Vampiric Aura", }
+            for _, buffName in ipairs(LeechEffects) do
+                if Casting.IHaveBuff(buffName) then return false end
+            end
+            return true
+        end,
+        shieldNeeded = function()
+            -- check for exactly 100% to help ensure the mob is targeting us, over 100% can indicate another is still targeted
+            return (mq.TLO.Me.PctHPs() <= Config:GetSetting('EquipShield')) or mq.TLO.Me.ActiveDisc() == "Deflection Discipline" or
+                (Config:GetSetting('NamedShieldLock') and ((Globals.AutoTargetIsNamed and Targeting.GetAutoTargetAggroPct() == 100) or Targeting.TankingXTNamed()))
+        end,
+    },
+    ['Charm']         = {
+        ['Assist'] = {
+            { name = "Taunt",            type = "Ability", },
+            { name = "Terror",           type = "Spell",   load_cond = function(self) return Config:GetSetting('DoTerror') end, },
+            { name = "Terror2",          type = "Spell",   load_cond = function(self) return Config:GetSetting('DoTerror') end, },
+            { name = "Terror3",          type = "Spell",   load_cond = function(self) return Config:GetSetting('DoTerror') end, },
+            { name = "Xeno's Faceguard", type = "Item",    load_cond = function(self) return mq.TLO.FindItem("=Xeno's Faceguard")() end, },
+        },
+    },
+    ['RotationOrder'] = {
+        { --Self Buffs
+            name = 'Downtime',
+            targetId = function(self) return { mq.TLO.Me.ID(), } end,
+            cond = function(self, combat_state)
+                return combat_state == "Downtime" and Casting.OkayToBuff() and Casting.AmIBuffable()
+            end,
+        },
+        {
+            name = 'PetSummon',
+            targetId = function(self) return { mq.TLO.Me.ID(), } end,
+            cond = function(self, combat_state)
+                return combat_state == "Downtime" and mq.TLO.Me.Pet.ID() == 0 and Casting.OkayToPetBuff() and Casting.AmIBuffable()
+            end,
+        },
+        { --Pet Buffs if we have one, timer because we don't need to constantly check this
+            name = 'PetBuff',
+            timer = 10,
+            targetId = function(self) return mq.TLO.Me.Pet.ID() > 0 and { mq.TLO.Me.Pet.ID(), } or {} end,
+            load_cond = function(self) return Config:GetSetting('DoPet') end,
+            cond = function(self, combat_state)
+                return combat_state == "Downtime" and mq.TLO.Me.Pet.ID() > 0 and Casting.OkayToPetBuff()
+            end,
+        },
+        {
+            name = 'GroupBuff',
+            state = 1,
+            steps = 1,
+            targetId = function(self) return Casting.GetBuffableIDs() end,
+            cond = function(self, combat_state)
+                return combat_state == "Downtime" and Casting.OkayToBuff()
+            end,
+        },
+        { --Actions that establish or maintain hatred
+            name = 'AEHateTools',
+            state = 1,
+            steps = 1,
+            doFullRotation = true,
+            IgnoreImmuneCheck = true, -- hate is the goal; still cast on Magic Immune
+            load_cond = function()
+                if not Core.IsTanking() then return false end
+                local bladeDisc = Config:GetSetting('BladeDiscUse') > 1 and Core.GetResolvedActionMapItem('BladeDisc')
+                local hateAA = Config:GetSetting('AETauntAA') and (Casting.CanUseAA("Explosion of Spite") or Casting.CanUseAA("Explosion of Hatred"))
+                local tauntSpell = Config:GetSetting('AETauntSpell') and Core.GetResolvedActionMapItem('AETaunt')
+                return bladeDisc or hateAA or tauntSpell
+            end,
+            targetId = function(self) return Targeting.CheckForAutoTargetID() end,
+            cond = function(self, combat_state)
+                if Core.AtCriticalHP() then return false end
+                return combat_state == "Combat" and Combat.AETauntCheck(true)
+            end,
+        },
+        { --Actions to lock down xtarg haters
+            name = 'HateTools(AggroTarget)',
+            state = 1,
+            steps = 0,
+            doFullRotation = true,
+            IgnoreImmuneCheck = true, -- hate is the goal; still cast on Magic Immune
+            load_cond = function() return Core.IsTanking() and Config:GetSetting('TankAggroScan') end,
+            targetId = function(self) return Targeting.CheckForAggroTargetID() end,
+            cond = function(self, combat_state)
+                if Core.AtCriticalHP() then return false end
+                return combat_state == "Combat"
+            end,
+        },
+        { --Actions that establish or maintain hatred
+            name = 'HateTools(AutoTarget)',
+            state = 1,
+            steps = 0,
+            doFullRotation = true,
+            IgnoreImmuneCheck = true, -- hate is the goal; still cast on Magic Immune
+            load_cond = function() return Core.IsTanking() end,
+            targetId = function(self) return Targeting.CheckForAutoTargetID() end,
+            cond = function(self, combat_state)
+                if Core.AtCriticalHP() then return false end
+                return combat_state == "Combat" and Targeting.HateToolsNeeded()
+            end,
+        },
+        { --Dynamic weapon swapping if UseBandolier is toggled
+            name = 'Weapon Management',
+            state = 1,
+            steps = 1,
+            load_cond = function() return Config:GetSetting('UseBandolier') end,
+            doFullRotation = true,
+            targetId = function(self) return Targeting.CheckForAutoTargetID() end,
+            cond = function(self, combat_state)
+                return combat_state == "Combat"
+            end,
+        },
+        { --Defensive actions triggered by low HP
+            name = 'EmergencyDefenses',
+            state = 1,
+            steps = 1,
+            doFullRotation = true,
+            targetId = function(self) return Targeting.CheckForAutoTargetID() end,
+            cond = function(self, combat_state)
+                return combat_state == "Combat" and Core.AtEmergencyHP()
+            end,
+        },
+        { --Prioritized in their own rotation to help keep HP topped to the desired level, includes emergency abilities
+            name = 'LifeTaps',
+            state = 1,
+            steps = 1,
+            doFullRotation = true,
+            targetId = function(self) return Targeting.CheckForAutoTargetID() end,
+            cond = function(self, combat_state)
+                return combat_state == "Combat"
+            end,
+        },
+        { --Defensive actions used proactively to prevent emergencies
+            name = 'Defenses',
+            state = 1,
+            steps = 1,
+            doFullRotation = true,
+            targetId = function(self) return Targeting.CheckForAutoTargetID() end,
+            cond = function(self, combat_state)
+                return combat_state == "Combat" and Targeting.IHaveAggro(100) and
+                    -- we are under our defense start HP
+                    (mq.TLO.Me.PctHPs() <= Config:GetSetting('DefenseStart') or
+                        -- we have met our defense count threshold
+                        self.Helpers.DefensiveDiscCheck(true) or
+                        -- we are fighting a named and we are tanking it
+                        Targeting.TankingXTNamed())
+            end,
+        },
+        { --Keep things from running
+            name = 'Snare',
+            state = 1,
+            steps = 1,
+            load_cond = function() return Config:GetSetting('DoSnare') end,
+            targetId = function(self) return Targeting.CheckForAutoTargetID() end,
+            cond = function(self, combat_state)
+                if Core.AtEmergencyHP() then return false end
+                return combat_state == "Combat" and not Globals.AutoTargetIsNamed and Targeting.HasXTHatersMax(Config:GetSetting('SnareCount'))
+            end,
+        },
+        { --Offensive actions to temporarily boost damage dealt
+            name = 'Burn',
+            state = 1,
+            steps = 4,
+            targetId = function(self) return Targeting.CheckForAutoTargetID() end,
+            cond = function(self, combat_state)
+                if Core.AtEmergencyHP() then return false end
+                return combat_state == "Combat" and Casting.BurnCheck() and Core.CombatActionsCheck()
+            end,
+        },
+        { --DPS Spells, includes recourse/gift maintenance
+            name = 'Combat',
+            state = 1,
+            steps = 1,
+            targetId = function(self) return Targeting.CheckForAutoTargetID() end,
+            cond = function(self, combat_state)
+                if Core.AtEmergencyHP() then return false end
+                return combat_state == "Combat" and Core.CombatActionsCheck()
+            end,
+        },
+    },
+    ['Rotations']     = {
+        ['Downtime']               = {
+            {
+                name = "Shroud",
+                type = "Spell",
+                tooltip = Tooltips.Shroud,
+                load_cond = function(self)
+                    return Config:GetSetting('ProcChoice') == 1 or
+                        (Config:GetSetting('ProcChoice') == 2 and not Core.GetResolvedActionMapItem('Mental'))
+                end,
+                active_cond = function(self, spell) return Casting.IHaveBuff(spell) end,
+                cond = function(self, spell)
+                    return Casting.SelfBuffCheck(spell)
+                end,
+            },
+            {
+                name = "Horror",
+                type = "Spell",
+                tooltip = Tooltips.Horror,
+                load_cond = function(self) return Config:GetSetting('ProcChoice') ~= 3 end,
+                active_cond = function(self, spell) return Casting.IHaveBuff(spell) end,
+                cond = function(self, spell)
+                    return Casting.SelfBuffCheck(spell)
+                end,
+            },
+            {
+                name = "Mental",
+                type = "Spell",
+                tooltip = Tooltips.Mental,
+                load_cond = function(self) return Config:GetSetting('ProcChoice') == 2 end,
+                active_cond = function(self, spell) return Casting.IHaveBuff(spell) end,
+                cond = function(self, spell)
+                    return Casting.SelfBuffCheck(spell)
+                end,
+            },
+            {
+                name = "CloakHP",
+                type = "Spell",
+                tooltip = Tooltips.CloakHP,
+                active_cond = function(self, spell) return Casting.IHaveBuff(spell) end,
+                cond = function(self, spell)
+                    return Casting.SelfBuffCheck(spell)
+                end,
+            },
+            {
+                name = "CallAtk",
+                type = "Spell",
+                tooltip = Tooltips.CallAtk,
+                load_cond = function(self) return Config:GetSetting("DoCallBuff") end,
+                active_cond = function(self, spell) return Casting.IHaveBuff(spell) end,
+                cond = function(self, spell)
+                    return Casting.SelfBuffCheck(spell)
+                end,
+            },
+            --You'll notice my use of TotalSeconds, this is to keep as close to 100% uptime as possible on these buffs, rebuffing early to decrease the chance of them falling off in combat
+            --I considered creating a function (helper or utils) to govern this as I use it on multiple classes but the difference between buff window/song window/aa/spell etc makes it unwieldy
+            -- if using duration checks, dont use SelfBuffCheck() (as it could return false when the effect is still on)
+            {
+                name = "Skin",
+                type = "Spell",
+                tooltip = Tooltips.Skin,
+                active_cond = function(self, spell) return Casting.IHaveBuff(spell) end,
+                cond = function(self, spell)
+                    return spell.RankName.Stacks() and (mq.TLO.Me.Buff(spell).Duration.TotalSeconds() or 0) < 60
+                end,
+            },
+            {
+                name = "Voice of Thule",
+                type = "AA",
+                tooltip = Tooltips.HateBuff,
+                load_cond = function(self) return Casting.CanUseAA("Voice of Thule") and Config:GetSetting('DoHateBuff') end,
+                active_cond = function(self, aaName) return Casting.IHaveBuff(mq.TLO.Me.AltAbility(aaName).Spell.ID()) end,
+                cond = function(self, aaName)
+                    return Casting.SelfBuffAACheck(aaName)
+                end,
+            },
+            {
+                name = "HateBuff",
+                type = "Spell",
+                tooltip = Tooltips.HateBuff,
+                load_cond = function(self) return not Casting.CanUseAA("Voice of Thule") and Config:GetSetting('DoHateBuff') end,
+                active_cond = function(self, spell) return Casting.IHaveBuff(spell) end,
+                cond = function(self, spell)
+                    if not Casting.CastReady(spell) then return false end
+                    return Casting.SelfBuffCheck(spell)
+                end,
+            },
+        },
+        ['GroupBuff']              = { -- Added to anchor clickies to
+
+        },
+        ['PetSummon']              = {
+            {
+                name = "PetSpell",
+                type = "Spell",
+                tooltip = Tooltips.PetSpell,
+                active_cond = function(self, spell) return mq.TLO.Me.Pet.ID() > 0 end,
+                post_activate = function(self, spell, success)
+                    if success and mq.TLO.Me.Pet.ID() > 0 then
+                        mq.delay(50) -- slight delay to prevent chat bug with command issue
+                        self:SetPetHold()
+                    end
+                end,
+            },
+        },
+        ['PetBuff']                = {
+            {
+                name = "PetHaste",
+                type = "Spell",
+                tooltip = Tooltips.PetHaste,
+                active_cond = function(self, spell) return mq.TLO.Me.PetBuff(spell.RankName())() ~= nil end,
+                cond = function(self, spell)
+                    return Casting.PetBuffCheck(spell)
+                end,
+            },
+            {
+                name = "Fortify Companion",
+                type = "AA",
+                active_cond = function(self, aaName) return mq.TLO.Me.PetBuff(aaName)() ~= nil end,
+                cond = function(self, aaName)
+                    return Casting.PetBuffAACheck(aaName)
+                end,
+            },
+            {
+                name = "Minionskin",
+                type = "Spell",
+                cond = function(self, spell)
+                    return Casting.PetBuffCheck(spell)
+                end,
+            },
+
+        },
+        ['EmergencyDefenses']      = {
+            --Note that in Tank Mode, defensive discs are preemptively cycled on named in the (non-emergency) Defenses rotation
+            --Abilities should be placed in order of lowest to highest triggered HP thresholds
+            --Some conditionals are commented out while I tweak percentages (or determine if they are necessary)
+            {
+                name = "OoW_Chest",
+                type = "Item",
+                tooltip = Tooltips.OoW_BP,
+            },
+            { --Note that on named we may already have a defensive disc running already, could make this remove other discs, but we have other options.
+                name = "BlockDisc",
+                type = "Disc",
+                tooltip = Tooltips.BlockDisc,
+                pre_activate = function(self)
+                    if Config:GetSetting('UseBandolier') and not Core.ShieldEquipped() then
+                        Core.SafeCallFunc("Equip Shield", ItemManager.BandolierSwap, "Shield")
+                    end
+                end,
+                cond = function(self, discSpell)
+                    return Casting.NoDiscActive()
+                end,
+            },
+            {
+                name = "LeechCurse",
+                type = "Disc",
+                tooltip = Tooltips.LeechCurse,
+                cond = function(self)
+                    return Casting.NoDiscActive()
+                end,
+            },
+            {
+                name = "UnholyAura",
+                type = "Disc",
+                tooltip = Tooltips.UnholyAura,
+                cond = function(self, discSpell, target)
+                    return Casting.NoDiscActive()
+                end,
+            },
+        },
+        ['HateTools(AutoTarget)']  = {
+            {
+                name = "Taunt",
+                type = "Ability",
+                tooltip = Tooltips.Taunt,
+                cond = function(self, abilityName, target)
+                    return Targeting.LostAutoTargetAggro()
+                end,
+            },
+            {
+                name = "Xeno's Faceguard",
+                type = "Item",
+                load_cond = function(self) return mq.TLO.FindItem("=Xeno's Faceguard")() end,
+            },
+            {
+                name = "Terror",
+                type = "Spell",
+                tooltip = Tooltips.Terror,
+                load_cond = function(self) return Config:GetSetting('DoTerror') end,
+            },
+            {
+                name = "Terror2",
+                type = "Spell",
+                tooltip = Tooltips.Terror,
+                load_cond = function(self) return Config:GetSetting('DoTerror') end,
+            },
+            {
+                name = "Terror3",
+                type = "Spell",
+                tooltip = Tooltips.Terror,
+                load_cond = function(self) return Config:GetSetting('DoTerror') end,
+            },
+            {
+                name = "PowerTapAC",
+                type = "Spell",
+                tooltip = Tooltips.PowerTapAC,
+                load_cond = function(self) return Config:GetSetting('DoACTap') end,
+            },
+        },
+        ['AEHateTools']            = {
+            {
+                name = "Artifact of Dread Gaze",
+                type = "Item",
+                load_cond = function(self) return mq.TLO.FindItem("=Artifact of Dread Gaze")() end,
+            },
+            {
+                name = "Explosion of Hatred",
+                type = "AA",
+                tooltip = Tooltips.ExplosionOfHatred,
+                load_cond = function(self) return Config:GetSetting('AETauntAA') end,
+            },
+            {
+                name = "Explosion of Spite",
+                type = "AA",
+                tooltip = Tooltips.ExplosionOfSpite,
+                load_cond = function(self) return Config:GetSetting('AETauntAA') end,
+            },
+            {
+                name = "BladeDisc",
+                type = "Disc",
+                load_cond = function(self) return Config:GetSetting('BladeDiscUse') > 1 end,
+                cond = function(self, discSpell)
+                    return Config:GetSetting('DoAEDamage')
+                end,
+            },
+            {
+                name = "AETaunt",
+                type = "Spell",
+                tooltip = Tooltips.AETaunt,
+                load_cond = function(self) return Config:GetSetting('AETauntSpell') end,
+                cond = function(self, spell, target)
+                    return not Core.AtEmergencyHP()
+                end,
+            },
+        },
+        ['HateTools(AggroTarget)'] = {
+            {
+                name = "Taunt",
+                type = "Ability",
+                tooltip = Tooltips.Taunt,
+            },
+            {
+                name = "Xeno's Faceguard",
+                type = "Item",
+                load_cond = function(self) return mq.TLO.FindItem("=Xeno's Faceguard")() end,
+            },
+            {
+                name = "Terror",
+                type = "Spell",
+                tooltip = Tooltips.Terror,
+                load_cond = function(self) return Config:GetSetting('DoTerror') end,
+            },
+            {
+                name = "Terror2",
+                type = "Spell",
+                tooltip = Tooltips.Terror,
+                load_cond = function(self) return Config:GetSetting('DoTerror') end,
+            },
+            {
+                name = "Terror3",
+                type = "Spell",
+                tooltip = Tooltips.Terror,
+                load_cond = function(self) return Config:GetSetting('DoTerror') end,
+            },
+            {
+                name = "ForPower",
+                type = "Spell",
+                tooltip = Tooltips.ForPower,
+                load_cond = function(self) return Config:GetSetting('DoForPower') end,
+            },
+            {
+                name = "PowerTapAC",
+                type = "Spell",
+                tooltip = Tooltips.PowerTapAC,
+                load_cond = function(self) return Config:GetSetting('DoACTap') end,
+            },
+        },
+        ['Burn']                   = {
+            {
+                name = "Visage of Death",
+                type = "AA",
+                cond = function(self, aaName)
+                    return Config:GetSetting('DoVisage')
+                end,
+            },
+            {
+                name = "Spire",
+                type = "AA",
+            },
+            { -- for DPS mode
+                name = "UnholyAura",
+                type = "Disc",
+                tooltip = Tooltips.UnholyAura,
+                load_cond = function(self) return not Core.IsTanking() end,
+                cond = function(self)
+                    return Casting.NoDiscActive()
+                end,
+            },
+            { -- for DPS mode
+                name = "Steelwrath",
+                type = "Disc",
+                load_cond = function(self) return not Core.IsTanking() end,
+                cond = function(self)
+                    return Casting.NoDiscActive()
+                end,
+            },
+            {
+                name = "Harm Touch",
+                type = "AA",
+                tooltip = Tooltips.HarmTouch,
+            },
+            {
+                name = "Leech Touch",
+                type = "AA",
+                IgnoreImmuneCheck = true,
+                tooltip = Tooltips.ThoughtLeech,
+                cond = function(self, aaName, target)
+                    return Config:GetSetting('DoLeechTouch') ~= 1
+                end,
+            },
+            {
+                name = "Skin",
+                type = "Spell",
+                tooltip = Tooltips.Skin,
+                cond = function(self, spell, target)
+                    if not Core.IsTanking() or not Targeting.TankingXTNamed() then return false end
+                    return Casting.SelfBuffCheck(spell)
+                end,
+            },
+        },
+        ['Snare']                  = {
+            {
+                name = "Encroaching Darkness",
+                tooltip = Tooltips.EncroachingDarkness,
+                type = "AA",
+                load_cond = function(self) return Casting.CanUseAA("Encroaching Darkness") end,
+                cond = function(self, aaName, target)
+                    return Casting.DetAACheck(aaName) and Targeting.MobHasLowHP(target) and not Casting.SnareImmuneTarget(target)
+                end,
+            },
+            {
+                name = "SnareDot",
+                type = "Spell",
+                tooltip = Tooltips.SnareDot,
+                load_cond = function(self) return not Casting.CanUseAA("Encroaching Darkness") end,
+                cond = function(self, spell, target)
+                    return Casting.DetSpellCheck(spell) and Targeting.MobHasLowHP(target) and not Casting.SnareImmuneTarget(target)
+                end,
+            },
+        },
+        ['Defenses']               = {
+            {
+                name = "Protective",
+                type = "Disc",
+                load_cond = function(self) return Core.IsTanking() end,
+                cond = function(self, discSpell, target)
+                    return Casting.NoDiscActive()
+                end,
+            },
+            {
+                name = "Mantle",
+                type = "Disc",
+                tooltip = Tooltips.Mantle,
+                load_cond = function(self) return Core.IsTanking() end,
+                cond = function(self, discSpell, target)
+                    return Casting.NoDiscActive() and Casting.DiscOnCoolDown('Protective')
+                end,
+            },
+            {
+                name = "Epic",
+                type = "Item",
+                tooltip = Tooltips.Epic,
+                cond = function(self, itemName, target)
+                    if Config:GetSetting('HoldEpicForNoDisc') and not Casting.NoDiscActive() then return false end
+                    return self.Helpers.LeechCheck(self) or Targeting.TankingXTNamed()
+                end,
+            },
+        },
+        ['LifeTaps']               = {
+            --Full rotation to make sure we use these in priority for emergencies
+            {
+                name = "Leech Touch",
+                type = "AA",
+                IgnoreImmuneCheck = true,
+                tooltip = Tooltips.LeechTouch,
+                cond = function(self, aaName, target)
+                    if Config:GetSetting('DoLeechTouch') == 2 then return false end
+                    return Core.AtCriticalHP()
+                end,
+            },
+            {
+                name = "LifeTap",
+                type = "Spell",
+                tooltip = Tooltips.LifeTap,
+                load_cond = function() return IsLifeTapSlotEnabled('LifeTapSpellChoice') end,
+                cond = function(self, spell)
+                    local myHP = mq.TLO.Me.PctHPs()
+                    return Casting.HaveManaToNuke() and myHP <= Config:GetSetting('StartLifeTap') or myHP <= Config:GetSetting('EmergencyStart')
+                end,
+            },
+            {
+                name = "LifeTap2",
+                type = "Spell",
+                tooltip = Tooltips.LifeTap,
+                load_cond = function() return IsLifeTapSlotEnabled('LifeTap2SpellChoice') end,
+                cond = function(self, spell)
+                    local myHP = mq.TLO.Me.PctHPs()
+                    return Casting.HaveManaToNuke() and myHP <= Config:GetSetting('StartLifeTap') or myHP <= Config:GetSetting('EmergencyStart')
+                end,
+            },
+            {
+                name = "LifeTap3",
+                type = "Spell",
+                tooltip = Tooltips.LifeTap,
+                load_cond = function() return IsLifeTapSlotEnabled('LifeTap3SpellChoice') end,
+                cond = function(self, spell)
+                    local myHP = mq.TLO.Me.PctHPs()
+                    return Casting.HaveManaToNuke() and myHP <= Config:GetSetting('StartLifeTap') or myHP <= Config:GetSetting('EmergencyStart')
+                end,
+            },
+        },
+        ['Combat']                 = {
+            {
+                name = "ForPower",
+                type = "Spell",
+                tooltip = Tooltips.ForPower,
+                load_cond = function(self) return Core.IsTanking() and Config:GetSetting('DoForPower') end,
+                cond = function(self, spell, target)
+                    return Casting.DetSpellCheck(spell, target)
+                end,
+            },
+            {
+                name = "SpearNuke",
+                type = "Spell",
+                tooltip = Tooltips.SpearNuke,
+                cond = function(self, spell, target)
+                    return Casting.HaveManaToNuke()
+                end,
+            },
+            {
+                name = "BladeDisc",
+                type = "Disc",
+                load_cond = function(self) return Config:GetSetting('BladeDiscUse') == 3 and Core.GetResolvedActionMapItem('BladeDisc') end,
+                cond = function(self, discSpell)
+                    return Config:GetSetting('DoAEDamage') and mq.TLO.Me.PctEndurance() >= Config:GetSetting("ManaToNuke") -- save endurance for emergency discs
+                end,
+            },
+            {
+                name = "BondTap",
+                type = "Spell",
+                tooltip = Tooltips.BondTap,
+                load_cond = function(self) return Config:GetSetting('DoBondTap') end,
+                cond = function(self, spell, target)
+                    if Config:GetSetting('DotNamedOnly') and not Globals.AutoTargetIsNamed then return false end
+                    return Casting.HaveManaToDot() and Casting.SelfBuffCheck(spell) -- use for recourse --Casting.DotSpellCheck(spell)
+                end,
+            },
+            {
+                name = "PoisonDot",
+                type = "Spell",
+                tooltip = Tooltips.PoisonDot,
+                load_cond = function(self) return Config:GetSetting('DoPoisonDot') end,
+                cond = function(self, spell, target)
+                    if Config:GetSetting('DotNamedOnly') and not Globals.AutoTargetIsNamed then return false end
+                    return Casting.HaveManaToDot() and Casting.DotSpellCheck(spell)
+                end,
+            },
+            {
+                name = "DireDot",
+                type = "Spell",
+                tooltip = Tooltips.DireDot,
+                load_cond = function(self) return Config:GetSetting('DoDireDot') end,
+                cond = function(self, spell, target)
+                    if Config:GetSetting('DotNamedOnly') and not Globals.AutoTargetIsNamed then return false end
+                    return Casting.HaveManaToDot() and Casting.DotSpellCheck(spell)
+                end,
+            },
+            {
+                name = "AncientBite",
+                type = "Spell",
+                tooltip = Tooltips.BiteTap,
+            },
+            {
+                name = "BiteTap",
+                type = "Spell",
+                tooltip = Tooltips.BiteTap,
+            },
+            {
+                name = "Vicious Bite of Chaos",
+                type = "AA",
+                tooltip = Tooltips.ViciousBiteOfChaos,
+            },
+            {
+                name = "Companion's Blessing",
+                type = "AA",
+                cond = function(self, aaName, target)
+                    return (mq.TLO.Me.Pet.PctHPs() or 999) <= Config:GetSetting('BigHealPoint')
+                end,
+            },
+            {
+                name = "PowerTapAtk",
+                type = "Spell",
+                tooltip = Tooltips.PowerTapAtk,
+                load_cond = function(self) return Config:GetSetting('DoAtkTap') end,
+                cond = function(self, spell, target)
+                    return Casting.SelfBuffCheck(spell)
+                end,
+            },
+            {
+                name = "Bash",
+                type = "Ability",
+                tooltip = Tooltips.Bash,
+                cond = function(self)
+                    return (Core.ShieldEquipped() or Casting.CanUseAA("2 Hand Bash"))
+                end,
+            },
+            {
+                name = "Slam",
+                type = "Ability",
+                load_cond = function(self) return mq.TLO.Me.Ability("Slam")() end,
+                tooltip = Tooltips.Slam,
+            },
+        },
+        ['Weapon Management']      = {
+            {
+                name = "Equip Shield",
+                type = "CustomFunc",
+                cond = function(self)
+                    if mq.TLO.Me.Bandolier("Shield").Active() then return false end
+                    return self.Helpers.shieldNeeded()
+                end,
+                custom_func = function(self)
+                    ItemManager.BandolierSwap("Shield")
+                    return true
+                end,
+            },
+            {
+                name = "Equip 2Hand",
+                type = "CustomFunc",
+                cond = function(self)
+                    if mq.TLO.Me.Bandolier("2Hand").Active() then return false end
+                    return mq.TLO.Me.PctHPs() >= Config:GetSetting('Equip2Hand') and not self.Helpers.shieldNeeded()
+                end,
+                custom_func = function(self)
+                    ItemManager.BandolierSwap("2Hand")
+                    return true
+                end,
+            },
+        },
+    },
+    -- New style spell list, gemless, priority-based. Will use the first set whose conditions are met.
+    -- The list name ("Default" in the list below) is abitrary, it is simply what shows up in the UI when this spell list is loaded.
+    -- Virtually any helper function or TLO can be used as a condition. Example: Mode or level-based lists.
+    -- The first list without conditions or whose conditions returns true will be loaded, all subsequent lists will be ignored.
+    -- Spells will be loaded in order (if the conditions are met), until all gem slots are full.
+    -- Loadout checks (such as scribing a spell or using the "Rescan Loadout" or "Reload Spells" buttons) will re-check these lists and may load a different set if things have changed.
+    ['SpellList']     = {
+        {
+            name = "Default",
+            -- cond = function(self) return true end, --Kept here for illustration, this line could be removed in this instance since we aren't using conditions.
+            spells = {
+                { name = "SpearNuke", },
+                { name = "LifeTap",     cond = function(self) return IsLifeTapSlotEnabled('LifeTapSpellChoice') end, },
+                { name = "SnareDot",    cond = function(self) return Config:GetSetting('DoSnare') and not Casting.CanUseAA("Encroaching Darkness") end, },
+                { name = "Terror",      cond = function(self) return Config:GetSetting('DoTerror') end, },
+                { name = "ForPower",    cond = function(self) return Config:GetSetting('DoForPower') end, },
+                { name = "AETaunt",     cond = function(self) return Config:GetSetting('AETauntSpell') end, },
+                { name = "BiteTap", },
+                { name = "AncientBite", },
+                { name = "BondTap",     cond = function(self) return Config:GetSetting('DoBondTap') end, },
+                { name = "PoisonDot",   cond = function(self) return Config:GetSetting('DoPoisonDot') end, },
+                { name = "DireDot",     cond = function(self) return Config:GetSetting('DoDireDot') end, },
+                { name = "PowerTapAC",  cond = function(self) return Config:GetSetting('DoACTap') end, },
+                { name = "PowerTapAtk", cond = function(self) return Config:GetSetting('DoAtkTap') end, },
+                { name = "Skin", },
+                { name = "HarmshieldSpell", cond = function(self) return Config:GetSetting('DoHarmshield') end, },
+                { name = "HateBuff",    cond = function(self) return Config:GetSetting('DoHateBuff') and not Casting.CanUseAA("Voice of Thule") end, },
+                { name = "LifeTap2",    cond = function(self) return IsLifeTapSlotEnabled('LifeTap2SpellChoice') end, },
+                { name = "Terror2",     cond = function(self) return Config:GetSetting('DoTerror') end, },
+                { name = "LifeTap3",    cond = function(self) return IsLifeTapSlotEnabled('LifeTap3SpellChoice') end, },
+                { name = "Terror3",     cond = function(self) return Config:GetSetting('DoTerror') end, },
+            },
+        },
+    },
+    ['PullAbilities'] = {
+        {
+            id = 'SpearNuke',
+            Type = "Spell",
+            DisplayName = function() return Core.GetResolvedActionMapItem('SpearNuke').RankName.Name() or "" end,
+            AbilityName = function() return Core.GetResolvedActionMapItem('SpearNuke').RankName.Name() or "" end,
+            AbilityRange = 200,
+            cond = function(self)
+                local resolvedSpell = Core.GetResolvedActionMapItem('SpearNuke')
+                if not resolvedSpell then return false end
+                return mq.TLO.Me.Gem(resolvedSpell.RankName.Name() or "")() ~= nil
+            end,
+        },
+        {
+            id = 'Terror',
+            Type = "Spell",
+            DisplayName = function() return Core.GetResolvedActionMapItem('Terror').RankName.Name() or "" end,
+            AbilityName = function() return Core.GetResolvedActionMapItem('Terror').RankName.Name() or "" end,
+            AbilityRange = 200,
+            cond = function(self)
+                local resolvedSpell = Core.GetResolvedActionMapItem('Terror')
+                if not resolvedSpell then return false end
+                return mq.TLO.Me.Gem(resolvedSpell.RankName.Name() or "")() ~= nil
+            end,
+        },
+        {
+            id = 'Terror2',
+            Type = "Spell",
+            DisplayName = function() return Core.GetResolvedActionMapItem('Terror2').RankName.Name() or "" end,
+            AbilityName = function() return Core.GetResolvedActionMapItem('Terror2').RankName.Name() or "" end,
+            AbilityRange = 200,
+            cond = function(self)
+                local resolvedSpell = Core.GetResolvedActionMapItem('Terror2')
+                if not resolvedSpell then return false end
+                return mq.TLO.Me.Gem(resolvedSpell.RankName.Name() or "")() ~= nil
+            end,
+        },
+        {
+            id = 'LifeTap',
+            Type = "Spell",
+            DisplayName = function() return Core.GetResolvedActionMapItem('LifeTap').RankName.Name() or "" end,
+            AbilityName = function() return Core.GetResolvedActionMapItem('LifeTap').RankName.Name() or "" end,
+            AbilityRange = 200,
+            cond = function(self)
+                if not IsLifeTapSlotEnabled('LifeTapSpellChoice') then return false end
+                local resolvedSpell = Core.GetResolvedActionMapItem('LifeTap')
+                if not resolvedSpell then return false end
+                return mq.TLO.Me.Gem(resolvedSpell.RankName.Name() or "")() ~= nil
+            end,
+        },
+        {
+            id = 'LifeTap2',
+            Type = "Spell",
+            DisplayName = function() return Core.GetResolvedActionMapItem('LifeTap2').RankName.Name() or "" end,
+            AbilityName = function() return Core.GetResolvedActionMapItem('LifeTap2').RankName.Name() or "" end,
+            AbilityRange = 200,
+            cond = function(self)
+                if not IsLifeTapSlotEnabled('LifeTap2SpellChoice') then return false end
+                local resolvedSpell = Core.GetResolvedActionMapItem('LifeTap2')
+                if not resolvedSpell then return false end
+                return mq.TLO.Me.Gem(resolvedSpell.RankName.Name() or "")() ~= nil
+            end,
+        },
+        {
+            id = 'LifeTap3',
+            Type = "Spell",
+            DisplayName = function() return Core.GetResolvedActionMapItem('LifeTap3').RankName.Name() or "" end,
+            AbilityName = function() return Core.GetResolvedActionMapItem('LifeTap3').RankName.Name() or "" end,
+            AbilityRange = 200,
+            cond = function(self)
+                if not IsLifeTapSlotEnabled('LifeTap3SpellChoice') then return false end
+                local resolvedSpell = Core.GetResolvedActionMapItem('LifeTap3')
+                if not resolvedSpell then return false end
+                return mq.TLO.Me.Gem(resolvedSpell.RankName.Name() or "")() ~= nil
+            end,
+        },
+    },
+    ['DefaultConfig'] = {
+        --Mode
+        ['Mode']              = {
+            DisplayName = "Mode",
+            Category = "Mode",
+            Tooltip = "Select the active Combat Mode for this PC.",
+            Type = "Custom",
+            RequiresLoadoutChange = true,
+            Default = 1,
+            Min = 1,
+            Max = 2,
+            FAQ = "What Modes does the Shadowknight have?",
+            Answer = "Shadowknights have a mode for Tanking and a mode for DPS.",
+        },
+
+        --Buffs and Debuffs
+        ['DoSnare']           = {
+            DisplayName = "Use Snares",
+            Group = "Abilities",
+            Header = "Debuffs",
+            Category = "Snare",
+            Index = 101,
+            Tooltip = "Use Snare(Snare Dot used until AA is available).",
+            Default = false,
+            RequiresLoadoutChange = true,
+        },
+        ['SnareCount']        = {
+            DisplayName = "Snare Max Mob Count",
+            Group = "Abilities",
+            Header = "Debuffs",
+            Category = "Snare",
+            Index = 102,
+            Tooltip = "Only use snare if there are [x] or fewer mobs on aggro. Helpful for AoE groups.",
+            Default = 3,
+            Min = 1,
+            Max = 99,
+        },
+        ['ProcChoice']        = {
+            DisplayName = "Buff Slot 1 Proc:",
+            Group = "Abilities",
+            Header = "Buffs",
+            Category = "Self",
+            Index = 101,
+            Tooltip = "Choose which line fills buff slot 1; the Horror line fills slot 2 unless disabled.",
+            Type = "Combo",
+            ComboOptions = { 'HP Proc: Shroud Line', 'Mana Proc: Mental Line', 'Disabled', },
+            Default = 1,
+            Min = 1,
+            Max = 3,
+            RequiresLoadoutChange = true,
+        },
+        ['DoCallBuff']        = {
+            DisplayName = "Use Call of Darkness",
+            Group = "Abilities",
+            Header = "Buffs",
+            Category = "Self",
+            Index = 102,
+            Tooltip = "Use your Call of Darkness buff (Slowly drains your HP to grant Atk).",
+            Default = false,
+            RequiresLoadoutChange = true,
+        },
+        ['DoVisage']          = {
+            DisplayName = "Use Visage of Death",
+            Group = "Abilities",
+            Header = "Buffs",
+            Category = "Self",
+            Index = 103,
+            Tooltip = "Use the Visage of Death AA.",
+            Default = true,
+            FAQ = "Why is my health draining so quickly out of combat?",
+            Answer =
+            "You may have Visage of Death enabled, which has a sizable self-damage component. You can disable VoD use in the Class options.",
+        },
+
+        --Taps
+        ['StartLifeTap']      = {
+            DisplayName = "HP % for LifeTaps",
+            Group = "Abilities",
+            Header = "Damage",
+            Category = "Taps",
+            Index = 101,
+            Tooltip = "Your HP % before we use Life Taps.",
+            Default = 99,
+            Min = 1,
+            Max = 100,
+        },
+        ['LifeTapSpellChoice'] = {
+            DisplayName = "LifeTap 1 Spell:",
+            Group = "Abilities",
+            Header = "Damage",
+            Category = "Taps",
+            Index = 102,
+            Tooltip =
+                "Which spell fills LifeTap gem 1.\n" ..
+                "Highest Available: auto-pick the highest you know (default).\n" ..
+                "None: do not load this LifeTap slot.\n" ..
+                "A specific spell: use exactly that spell (must be in your book).",
+            RequiresLoadoutChange = true,
+            Type = "Combo",
+            ComboOptions = lifeTapSpellComboOptions,
+            Default = 1,
+            Min = 1,
+            Max = #lifeTapSpellComboOptions,
+        },
+        ['LifeTap2SpellChoice'] = {
+            DisplayName = "LifeTap 2 Spell:",
+            Group = "Abilities",
+            Header = "Damage",
+            Category = "Taps",
+            Index = 103,
+            Tooltip =
+                "Which spell fills LifeTap gem 2.\n" ..
+                "Highest Available: next-highest unused LifeTap.\n" ..
+                "None: do not load this slot (frees a gem).\n" ..
+                "Do not pick the same spell as another LifeTap slot.",
+            RequiresLoadoutChange = true,
+            Type = "Combo",
+            ComboOptions = lifeTapSpellComboOptions,
+            Default = 1,
+            Min = 1,
+            Max = #lifeTapSpellComboOptions,
+        },
+        ['LifeTap3SpellChoice'] = {
+            DisplayName = "LifeTap 3 Spell:",
+            Group = "Abilities",
+            Header = "Damage",
+            Category = "Taps",
+            Index = 104,
+            Tooltip =
+                "Which spell fills LifeTap gem 3.\n" ..
+                "Highest Available: next-highest unused LifeTap.\n" ..
+                "None: do not load this slot (frees a gem).\n" ..
+                "Do not pick the same spell as another LifeTap slot.",
+            RequiresLoadoutChange = true,
+            Type = "Combo",
+            ComboOptions = lifeTapSpellComboOptions,
+            Default = 1,
+            Min = 1,
+            Max = #lifeTapSpellComboOptions,
+        },
+        ['DoACTap']           = {
+            DisplayName = "Use AC Tap",
+            Group = "Abilities",
+            Header = "Damage",
+            Category = "Taps",
+            Index = 105,
+            Tooltip = "Memorize and use the highest available AC Tap spell.",
+            RequiresLoadoutChange = true,
+            Default = true,
+            ConfigType = "Advanced",
+        },
+        ['DoAtkTap']          = {
+            DisplayName = "Use Attack Tap",
+            Group = "Abilities",
+            Header = "Damage",
+            Category = "Taps",
+            Index = 106,
+            Tooltip = function() return Ui.GetDynamicTooltipForSpell("PowerTapAtk") end,
+            RequiresLoadoutChange = true,
+            Default = true,
+            ConfigType = "Advanced",
+        },
+        ['DoLeechTouch']      = {
+            DisplayName = "Leech Touch Use:",
+            Group = "Abilities",
+            Header = "Damage",
+            Category = "Taps",
+            Index = 107,
+            Tooltip = "When to use Leech Touch",
+            Type = "Combo",
+            ComboOptions = { 'On critically low HP', 'As DD during burns', 'For HP or DD', },
+            Default = 1,
+            Min = 1,
+            Max = 3,
+            ConfigType = "Advanced",
+        },
+
+        --DoT Spells
+        ['DoBondTap']         = {
+            DisplayName = "Use Bond Dot",
+            Group = "Abilities",
+            Header = "Damage",
+            Category = "Over Time",
+            Index = 101,
+            Tooltip = function() return Ui.GetDynamicTooltipForSpell("BondTap") end,
+            RequiresLoadoutChange = true,
+            Default = false,
+        },
+        ['DoPoisonDot']       = {
+            DisplayName = "Use Poison Dot",
+            Group = "Abilities",
+            Header = "Damage",
+            Category = "Over Time",
+            Index = 102,
+            Tooltip = function() return Ui.GetDynamicTooltipForSpell("PoisonDot") end,
+            RequiresLoadoutChange = true,
+            Default = true,
+        },
+        ['DoDireDot']         = {
+            DisplayName = "Use Dire Dot",
+            Group = "Abilities",
+            Header = "Damage",
+            Category = "Over Time",
+            Index = 103,
+            Tooltip = function() return Ui.GetDynamicTooltipForSpell("DireDot") end,
+            RequiresLoadoutChange = true,
+            Default = false,
+        },
+        ['DotNamedOnly']      = {
+            DisplayName = "Only Dot Named",
+            Group = "Abilities",
+            Header = "Damage",
+            Category = "Over Time",
+            Index = 104,
+            Tooltip = "Any selected dot above will only be used on a named mob.",
+            Default = true,
+        },
+
+        -- AE Damage
+        ['BladeDiscUse']      = {
+            DisplayName = "Blade Disc Use:",
+            Group = "Abilities",
+            Header = "Damage",
+            Category = "AE",
+            Index = 101,
+            Tooltip = "When to use your AE Blade Disc Line (DPS mode will not attempt to regain hate).",
+            RequiresLoadoutChange = true,
+            Type = "Combo",
+            ComboOptions = { 'Disabled', 'Only To Regain Hate', 'Whenever Possible', },
+            Default = 2,
+            Min = 1,
+            Max = 3,
+        },
+
+        --Hate Tools
+        ['DoHateBuff']        = {
+            DisplayName = "Use Hate Buff",
+            Group = "Abilities",
+            Header = "Buffs",
+            Category = "Self",
+            Index = 104,
+            Tooltip =
+            "Use your Visage buff (Voice of ... line). We will continue to use the spell if slots are available (for the damage shield). The spell can be disabled directly in rotations.",
+            Default = true,
+            ConfigType = "Advanced",
+            RequiresLoadoutChange = true,
+        },
+        ['DoHarmshield']      = {
+            DisplayName = "Use Harmshield",
+            Group = "Abilities",
+            Header = "Buffs",
+            Category = "Self",
+            Index = 105,
+            Tooltip = "Memorize Harmshield when gem slots allow (priority loadout).",
+            Default = true,
+            ConfigType = "Advanced",
+            RequiresLoadoutChange = true,
+        },
+        ['DoTerror']          = {
+            DisplayName = "Use Terror Taunts",
+            Group = "Abilities",
+            Header = "Tanking",
+            Category = "Hate Tools",
+            Index = 101,
+            Tooltip = "Use Terror line taunts (the number memorized is based on your other selected options).",
+            Default = true,
+            ConfigType = "Advanced",
+            RequiresLoadoutChange = true,
+        },
+        ['AETauntAA']         = {
+            DisplayName = "Use AE Taunt AA",
+            Group = "Abilities",
+            Header = "Tanking",
+            Category = "Hate Tools",
+            Index = 102,
+            Tooltip = "Use Explosions of Hatred and Spite.",
+            RequiresLoadoutChange = true,
+            Default = true,
+            ConfigType = "Advanced",
+            FAQ = "Why do we treat the Explosions the same? One is targeted, one is PBAE",
+            Answer = "There are currently no scripted conditions where Hatred would be used at long range, thus, for ease of use, we can treat them similarly.",
+        },
+        ['AETauntSpell']      = {
+            DisplayName = "Use AE Taunt Spell",
+            Group = "Abilities",
+            Header = "Tanking",
+            Category = "Hate Tools",
+            Index = 103,
+            Tooltip = "Use your AE Taunt spell line.",
+            RequiresLoadoutChange = true,
+            Default = true,
+            ConfigType = "Advanced",
+        },
+        ['DoForPower']        = {
+            DisplayName = "Use \"For Power\"",
+            Group = "Abilities",
+            Header = "Tanking",
+            Category = "Hate Tools",
+            Index = 104,
+            Tooltip = function() return Ui.GetDynamicTooltipForSpell("ForPower") end,
+            RequiresLoadoutChange = true,
+            Default = true,
+            ConfigType = "Advanced",
+        },
+
+        --Defenses
+        ['DiscCount']         = {
+            DisplayName = "Def. Disc. Count",
+            Group = "Abilities",
+            Header = "Tanking",
+            Category = "Defenses",
+            Index = 101,
+            Tooltip = "Number of mobs around you before you use preemptively use Defensive Discs.",
+            Default = 4,
+            Min = 1,
+            Max = 10,
+            ConfigType = "Advanced",
+        },
+        ['DefenseStart']      = {
+            DisplayName = "Defense HP",
+            Group = "Abilities",
+            Header = "Tanking",
+            Category = "Defenses",
+            Index = 102,
+            Tooltip = "The HP % where we will use defensive actions like discs, epics, etc.\nNote that fighting a named will also trigger these actions.",
+            Default = 60,
+            Min = 1,
+            Max = 100,
+            ConfigType = "Advanced",
+        },
+        ['HoldEpicForNoDisc'] = {
+            DisplayName = "Epic Only Without Disc",
+            Group = "Abilities",
+            Header = "Tanking",
+            Category = "Defenses",
+            Index = 103,
+            Tooltip = "Only use your epic if you have no defensive disc active.\nNote: Epic already has a check to not be used when other leech effects are active.",
+            Default = true,
+        },
+
+        --Equipment
+        ['UseBandolier']      = {
+            DisplayName = "Dynamic Weapon Swap",
+            Group = "Items",
+            Header = "Bandolier",
+            Category = "Bandolier",
+            Index = 101,
+            Tooltip = "Enable 1H+S/2H swapping based off of current health. ***YOU MUST HAVE BANDOLIER ENTRIES NAMED \"Shield\" and \"2Hand\" TO USE THIS FUNCTION.***",
+            Default = false,
+            RequiresLoadoutChange = true,
+        },
+        ['EquipShield']       = {
+            DisplayName = "Equip Shield",
+            Group = "Items",
+            Header = "Bandolier",
+            Category = "Bandolier",
+            Index = 102,
+            Tooltip = "Under this HP%, you will swap to your \"Shield\" bandolier entry. (Dynamic Bandolier Enabled Only)",
+            Default = 50,
+            Min = 1,
+            Max = 100,
+            ConfigType = "Advanced",
+        },
+        ['Equip2Hand']        = {
+            DisplayName = "Equip 2Hand",
+            Group = "Items",
+            Header = "Bandolier",
+            Category = "Bandolier",
+            Index = 103,
+            Tooltip = "Over this HP%, you will swap to your \"2Hand\" bandolier entry. (Dynamic Bandolier Enabled Only)",
+            Default = 75,
+            Min = 1,
+            Max = 100,
+            ConfigType = "Advanced",
+        },
+        ['NamedShieldLock']   = {
+            DisplayName = "Shield on Named",
+            Group = "Items",
+            Header = "Bandolier",
+            Category = "Bandolier",
+            Index = 104,
+            Tooltip = "Keep Shield equipped while tanking a named.",
+            Default = true,
+            FAQ = "Why does my SHD switch to a Shield on puny gray named?",
+            Answer = "The Shield on Named option doesn't check levels, so feel free to disable this setting (or Bandolier swapping entirely) if you are farming fodder.",
+        },
+    },
+}
+
+return _ClassConfig

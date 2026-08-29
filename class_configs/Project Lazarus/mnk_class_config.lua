@@ -1,0 +1,438 @@
+local mq           = require('mq')
+local Casting      = require("utils.casting")
+local Combat       = require("utils.combat")
+local Config       = require('utils.config')
+local Core         = require("utils.core")
+local Globals      = require("utils.globals")
+local Targeting    = require("utils.targeting")
+
+local _ClassConfig = {
+    _version          = "2.2 - Project Lazarus",
+    _author           = "Algar, Derple",
+    ['Modes']         = {
+        'DPS',
+    },
+    ['ModeChecks']    = {
+        IsCuring = function() return Config:GetSetting('DoCures') end,
+    },
+    ['Cure']          = {
+        ['DetDispel'] = {
+            { type = "AA", name = "Purify Body", selfOnly = true, },
+        },
+    },
+    ['Themes']        = {
+        ['DPS'] = {
+            { element = ImGuiCol.TitleBgActive,    color = { r = 0.35, g = 0.25, b = 0.15, a = 0.8, }, },
+            { element = ImGuiCol.TableHeaderBg,    color = { r = 0.35, g = 0.25, b = 0.15, a = 0.8, }, },
+            { element = ImGuiCol.Tab,              color = { r = 0.14, g = 0.10, b = 0.06, a = 0.8, }, },
+            { element = ImGuiCol.TabSelected,      color = { r = 0.35, g = 0.25, b = 0.15, a = 0.8, }, },
+            { element = ImGuiCol.TabHovered,       color = { r = 0.35, g = 0.25, b = 0.15, a = 1.0, }, },
+            { element = ImGuiCol.Header,           color = { r = 0.14, g = 0.10, b = 0.06, a = 0.8, }, },
+            { element = ImGuiCol.HeaderActive,     color = { r = 0.35, g = 0.25, b = 0.15, a = 0.8, }, },
+            { element = ImGuiCol.HeaderHovered,    color = { r = 0.35, g = 0.25, b = 0.15, a = 1.0, }, },
+            { element = ImGuiCol.FrameBgHovered,   color = { r = 0.35, g = 0.25, b = 0.15, a = 0.7, }, },
+            { element = ImGuiCol.Button,           color = { r = 0.23, g = 0.16, b = 0.10, a = 0.8, }, },
+            { element = ImGuiCol.ButtonActive,     color = { r = 0.35, g = 0.25, b = 0.15, a = 0.8, }, },
+            { element = ImGuiCol.ButtonHovered,    color = { r = 0.35, g = 0.25, b = 0.15, a = 1.0, }, },
+            { element = ImGuiCol.TextSelectedBg,   color = { r = 0.35, g = 0.25, b = 0.15, a = 0.1, }, },
+            { element = ImGuiCol.FrameBg,          color = { r = 0.14, g = 0.10, b = 0.06, a = 0.8, }, },
+            { element = ImGuiCol.SliderGrab,       color = { r = 0.85, g = 0.55, b = 0.15, a = 0.8, }, },
+            { element = ImGuiCol.SliderGrabActive, color = { r = 0.85, g = 0.55, b = 0.15, a = 0.9, }, },
+            { element = ImGuiCol.FrameBgActive,    color = { r = 0.35, g = 0.25, b = 0.15, a = 1.0, }, },
+        },
+    },
+    ['ItemSets']      = {
+        ['Epic'] = {
+            "Transcended Fistwraps of Immortality",
+            "Fistwraps of Celestial Discipline",
+        },
+        ['OoW_Chest'] = {
+            "Fiercehand's Ascendant Shroud of the Focused",
+            "Fiercehand Shroud of the Focused",
+            "Stillmind Tunic",
+        },
+    },
+    ['AbilitySets']   = {
+        ['EndRegen'] = {
+            "Fourth Wind Discipline", -- Level 71 Laz Custom
+            "Third Wind Discipline",  -- Level 70 Laz Custom
+            -- "Second Wind",         -- Level 65
+        },
+        ['MonkAura'] = {
+            "Grandmaster's Aura", -- Level 71 Laz Custom
+            "Master's Aura",      -- Level 65
+            "Disciple's Aura",    -- Level 55
+        },
+        ['Fang'] = {
+            "Ancient: Arachnid Fang", -- Level 71 Laz Custom
+            "Dragon Fang",            -- Level 69
+            "Clawstriker's Flurry",   -- Level 65
+        },
+        ['FistsOfWu'] = {
+            "Fists of Thundercrest", -- Level 71 Laz Custom
+            "Fists of Wu",           -- Level 65
+        },
+        ['MeleeMit'] = {
+            "Impenetrable Discipline", -- Level 65
+            "Earthwalk Discipline",    -- Level 65
+            "Stonestance Discipline",  -- Level 51
+        },
+        ['FistDisc'] = {
+            "Stormfist Discipline",   -- Level 71 Laz Custom
+            "Scaledfist Discipline",  -- Level 65
+            "Ashenhand Discipline",   -- Level 60
+            "Thunderkick Discipline", -- Level 52
+        },
+        ['Heel'] = {
+            "Heel of Kai",   -- Level 70
+            "Heel of Kanji", -- Level 65
+        },
+        ['Speed'] = {
+            "Velocity Focus Discipline", -- Level 71 Laz Custom
+            "Speed Focus Discipline",    -- Level 63
+        },
+        ['Palm'] = {
+            "Crystalpalm Discipline",   -- Level 70
+            "Hundred Fists Discipline", -- Level 57
+            "Innerflame Discipline",    -- Level 56
+        },
+        ['Voiddance'] = {
+            "Dragondance Discipline", -- Level 71 Laz Custom
+            "Voiddance Discipline",   -- Level 54
+        },
+        ['ReprisalDisc'] = {          -- Manual use only for now, reprisal does not fire unless the rune is broken
+            "Arcane Reprisal",        -- Level 71 Laz Custom
+        },
+        ['Fists'] = {
+            "Wheel of Fists", -- Level 71 Laz Custom
+        },
+        -- ['ResistantDisc'] = {
+        --     "Dreamwalk Discipline", -- Level 66
+        --     "Resistant Discipline", -- Level 30
+        -- },
+    },
+    ['Helpers']       = {
+    },
+    ['RotationOrder'] = {
+        {
+            name = 'Downtime',
+            targetId = function(self) return { mq.TLO.Me.ID(), } end,
+            cond = function(self, combat_state)
+                return combat_state == "Downtime" and Casting.OkayToBuff() and Casting.AmIBuffable()
+            end,
+        },
+        {
+            name = 'Emergency(Health)',
+            state = 1,
+            steps = 1,
+            doFullRotation = true,
+            targetId = function(self) return Targeting.CheckForAutoTargetID() end,
+            cond = function(self, combat_state)
+                return Targeting.HasXTHaters() and not mq.TLO.Me.Feigning() and Core.AtEmergencyHP()
+            end,
+        },
+        {
+            name = 'Emergency(Aggro)',
+            state = 1,
+            steps = 1,
+            doFullRotation = true,
+            targetId = function(self) return Targeting.CheckForAutoTargetID() end,
+            cond = function(self, combat_state)
+                return not mq.TLO.Me.Feigning() and Targeting.IHaveAggro(100) and (Core.AtEmergencyHP() or Globals.AutoTargetIsNamed)
+            end,
+        },
+        {
+            name = 'Burn',
+            state = 1,
+            steps = 4,
+            targetId = function(self) return Targeting.CheckForAutoTargetID() end,
+            cond = function(self, combat_state)
+                return combat_state == "Combat" and Casting.BurnCheck() and not mq.TLO.Me.Feigning()
+            end,
+        },
+        {
+            name = 'BurnDisc',
+            state = 1,
+            steps = 1,
+            doFullRotation = true,
+            targetId = function(self) return Targeting.CheckForAutoTargetID() end,
+            cond = function(self, combat_state)
+                return combat_state == "Combat" and Casting.BurnCheck() and Casting.NoDiscActive()
+            end,
+        },
+        {
+            name = 'CombatBuff',
+            state = 1,
+            steps = 1,
+            targetId = function(self) return Targeting.CheckForAutoTargetID() end,
+            cond = function(self, combat_state)
+                return combat_state == "Combat" and not mq.TLO.Me.Feigning()
+            end,
+        },
+        {
+            name = 'DPS',
+            state = 1,
+            steps = 1,
+            targetId = function(self) return Targeting.CheckForAutoTargetID() end,
+            cond = function(self, combat_state)
+                return combat_state == "Combat" and not mq.TLO.Me.Feigning()
+            end,
+        },
+    },
+    ['Rotations']     = {
+        ['Downtime']          = {
+            {
+                name = "MonkAura",
+                type = "Disc",
+                active_cond = function(self, discSpell)
+                    return Casting.AuraActiveByName(discSpell.RankName.Name())
+                end,
+                pre_activate = function(self, discSpell)
+                    if not Casting.AuraActiveByName(discSpell.RankName.Name()) then mq.TLO.Me.Aura(1).Remove() end
+                end,
+                cond = function(self, discSpell)
+                    return not Casting.AuraActiveByName(discSpell.RankName.Name())
+                end,
+            },
+        },
+        ['Emergency(Health)'] = {
+            {
+                name = "Mend",
+                type = "Ability",
+            },
+            {
+                name = "Epic",
+                type = "Item",
+            },
+            {
+                name = "Blood Drinker's Coating",
+                type = "Item",
+                load_cond = function(self) return Config:GetSetting('DoCoating') end,
+                cond = function(self, itemName, target)
+                    return Casting.SelfBuffItemCheck(itemName)
+                end,
+            },
+        },
+        ['Emergency(Aggro)']  = {
+            {
+                name = "Imitate Death",
+                type = "AA",
+                load_cond = function(self) return Config:GetSetting('AggroFeign') end,
+                cond = function(self, aaName, target)
+                    return Casting.OkayToCombatEscape()
+                end,
+            },
+            {
+                name = "Voiddance",
+                type = "Disc",
+                cond = function(self, discSpell)
+                    return Core.AtCriticalHP()
+                end,
+            },
+            {
+                name = "MeleeMit",
+                type = "Disc",
+                cond = function(self, discSpell)
+                    return not Casting.DiscTriggerActive('Voiddance')
+                end,
+            },
+            {
+                name = "OoW_Chest",
+                type = "Item",
+            },
+            {
+                name = "Armor of Experience",
+                type = "AA",
+                load_cond = function(self) return Config:GetSetting('DoVetAA') end,
+                cond = function(self, aaName)
+                    return Core.AtCriticalHP() and not Casting.DiscTriggerActive('Voiddance')
+                end,
+            },
+            {
+                name = "Feign Death",
+                type = "Ability",
+                load_cond = function(self) return Config:GetSetting('AggroFeign') end,
+                cond = function(self, abilityName)
+                    return Casting.OkayToCombatEscape()
+                end,
+            },
+        },
+        ['Burn']              = {
+            {
+                name = "Fundament: Third Spire of the Sensei",
+                type = "AA",
+            },
+            {
+                name = "Zan Fi's Thunderous Whistle", --overwrites infusion of thunder
+                type = "AA",
+                cond = function(self, aaName)
+                    return Casting.SelfBuffAACheck(aaName)
+                end,
+            },
+            {
+                name = "Destructive Force",
+                type = "AA",
+                cond = function(self, aaName)
+                    if not Config:GetSetting("DoAEDamage") then return false end
+                    return Combat.AETargetCheck()
+                end,
+            },
+            {
+                name = "Silent Strikes",
+                type = "AA",
+                cond = function(self, aaName, target)
+                    return Globals.AutoTargetIsNamed and (mq.TLO.Me.PctAggro() or 0) > 60
+                end,
+            },
+            {
+                name = "Intensity of the Resolute",
+                type = "AA",
+                load_cond = function(self) return Config:GetSetting('DoVetAA') end,
+            },
+            {
+                name = "Five Point Palm",
+                type = "AA",
+                load_cond = function(self) return Config:GetSetting('DoFivePointPalm') end,
+                cond = function(self, aaName)
+                    return Core.GetMainAssistPctHPs() > 80 and mq.TLO.Me.PctHPs() > 80
+                end,
+            },
+        },
+        ['BurnDisc']          = {
+            {
+                name = "Heel",
+                type = "Disc",
+            },
+            {
+                name = "Palm",
+                type = "Disc",
+            },
+            {
+                name = "FistDisc",
+                type = "Disc",
+            },
+            {
+                name = "Speed",
+                type = "Disc",
+            },
+        },
+        ['CombatBuff']        = {
+            {
+                name = "EndRegen",
+                type = "Disc",
+                cond = function(self, discSpell)
+                    return mq.TLO.Me.PctEndurance() < 15
+                end,
+            },
+            {
+                name = "FistsOfWu",
+                type = "Disc",
+                cond = function(self, discSpell)
+                    return Casting.SelfBuffCheck(discSpell)
+                end,
+            },
+            {
+                name = "Infusion of Thunder",
+                type = "AA",
+                cond = function(self, aaName)
+                    if mq.TLO.Me.Buff("Zan Fi's Thunderous Whistle")() then return false end
+                    return Casting.SelfBuffAACheck(aaName)
+                end,
+            },
+        },
+        ['DPS']               = {
+            {
+                name = "Eye Gouge",
+                type = "AA",
+                cond = function(self, aaName, target)
+                    return Casting.DetAACheck(aaName, target)
+                end,
+            },
+            {
+                name = "Fists",
+                type = "Disc",
+            },
+            {
+                name = "Fang",
+                type = "Disc",
+            },
+            {
+                name = "Tiger Claw",
+                type = "Ability",
+            },
+            {
+                name = "Flying Kick",
+                type = "Ability",
+            },
+        },
+    },
+    ['PullAbilities'] = {
+        {
+            id = 'Grappling Strike',
+            Type = "AA",
+            DisplayName = 'Grappling Strike',
+            AbilityName = 'Grappling Strike',
+            AbilityRange = 50,
+            cond = function(self)
+                return Casting.CanUseAA('Grappling Strike')
+            end,
+        },
+    },
+    ['DefaultConfig'] = {
+        ['Mode']            = {
+            DisplayName = "Mode",
+            Category = "Combat",
+            Tooltip = "Select the Combat Mode for this Toon",
+            Type = "Custom",
+            RequiresLoadoutChange = true,
+            Default = 1,
+            Min = 1,
+            Max = 1,
+            FAQ = "What do the different Modes Do?",
+            Answer = "Currently there is only DPS mode for Monks, more modes may be added in the future.",
+        },
+        ['DoVetAA']         = {
+            DisplayName = "Use Vet AA",
+            Group = "Abilities",
+            Header = "Buffs",
+            Category = "Self",
+            Index = 102,
+            Tooltip = "Use Veteran AA such as Intensity of the Resolute or Armor of Experience as necessary.",
+            Default = true,
+            ConfigType = "Advanced",
+            RequiresLoadoutChange = true,
+        },
+        ['DoFivePointPalm'] = {
+            DisplayName = "Do Five Point Palm",
+            Group = "Abilities",
+            Header = "Buffs",
+            Category = "Self",
+            Index = 101,
+            Tooltip = "Use your Five Point Palm proc AA (slowly drains your life but adds a heavy proc effect).",
+            Default = true,
+            RequiresLoadoutChange = true,
+        },
+        ['AggroFeign']      = {
+            DisplayName = "Emergency Feign",
+            Group = "Abilities",
+            Header = "Utility",
+            Category = "Emergency",
+            Index = 101,
+            Tooltip = "Use your Feign AA when you have aggro at low health or aggro on a mob detected as a 'named' by RGMercs (see Spawns tab)..",
+            Default = true,
+            RequiresLoadoutChange = true,
+        },
+        ['DoCoating']       = {
+            DisplayName = "Use Coating",
+            Group = "Items",
+            Header = "Clickies",
+            Category = "Class Config Clickies",
+            Index = 101,
+            Tooltip = "Click your Blood Drinker's Coating in an emergency.",
+            Default = false,
+            RequiresLoadoutChange = true,
+        },
+    },
+}
+
+return _ClassConfig

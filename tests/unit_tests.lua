@@ -1,0 +1,716 @@
+---@diagnostic disable: duplicate-set-field, need-check-nil
+local Combat    = require("utils.combat")
+local Globals   = require("utils.globals")
+local Logger    = require("utils.logger")
+local Strings   = require("utils.strings")
+local Targeting = require("utils.targeting")
+
+local UnitTests = {}
+
+local function mockSpawn(id, name, pctHp, isNamed, distance)
+    local t = {
+        _id        = id,
+        _name      = name,
+        _pctHp     = pctHp,
+        _isNamed   = isNamed,
+        _dist      = distance or 50,
+        _isTempPet = false,
+        _type      = "NPC",
+    }
+    setmetatable(t, { __call = function() return true end, })
+    t.ID         = function() return t._id end
+    t.Type       = function() return t._type end
+    t.Master     = { Type = function() return nil end, }
+    t.CleanName  = function() return t._name end
+    t.Name       = function() return t._name end
+    t.PctHPs     = function() return t._pctHp end
+    t.Distance   = function() return t._dist end
+    t.Distance3D = function() return t._dist end
+    t.X          = function() return -99999 end
+    t.Y          = function() return -99999 end
+    t.Z          = function() return -99999 end
+    t.PctAggro   = function() return 100 end
+    t.Moving     = function() return false end
+    t.Animation  = function() return 0 end
+    t.Dead       = function() return t._pctHp <= 0 end
+    t.Aggressive = function() return true end
+    t.TargetType = function() return "Auto Hater" end
+    t.Surname    = function() return "" end
+    return t
+end
+
+local passed = 0
+local failed = 0
+
+local function assertEq(label, got, expected)
+    if got ~= expected then
+        Logger.log_error("\arSELF TEST FAILED\ax [%s]: expected %s got %s", label, tostring(expected), tostring(got))
+        failed = failed + 1
+    else
+        Logger.log_debug("\agSELF TEST PASSED\ax [%s]", label)
+        passed = passed + 1
+    end
+end
+
+--- Runs all unit tests and returns true if all passed.
+--- @return boolean
+function UnitTests.RunAll()
+    passed = 0
+    failed = 0
+    Logger.log_info("UnitTests: Running self tests...")
+
+    -- Patch Targeting.IsNamed to use mock's _isNamed field
+    local origIsNamed = Targeting.IsNamed
+    ---@diagnostic disable-next-line: undefined-field
+    Targeting.IsNamed = function(spawn) return spawn and spawn._isNamed or false end
+
+    local noHpPref    = { prefLow = false, prefHigh = false, }
+    local lowHpPref   = { prefLow = true, prefHigh = false, }
+    local highHpPref  = { prefLow = false, prefHigh = true, }
+    local prefNamed   = { prefNamed = true, prefTrash = false, }
+    local prefTrash   = { prefNamed = false, prefTrash = true, }
+    local noNamePref  = { prefNamed = false, prefTrash = false, }
+
+    local spawnA      = mockSpawn(1, "TrashA", 80, false)
+    local spawnB      = mockSpawn(2, "TrashB", 40, false)
+    local spawnC      = mockSpawn(3, "Named", 60, true)
+
+    -- UpdateBucket: prefLow picks lower hp
+    do
+        local bucket = { hp = 101, id = 0, }
+        Combat.UpdateBucket(spawnA, bucket, true)
+        assertEq("UpdateBucket prefLow: first pick", bucket.id, 1)
+        Combat.UpdateBucket(spawnB, bucket, true)
+        assertEq("UpdateBucket prefLow: lower wins", bucket.id, 2)
+        Combat.UpdateBucket(spawnA, bucket, true)
+        assertEq("UpdateBucket prefLow: higher ignored", bucket.id, 2)
+    end
+
+    -- UpdateBucket: prefHigh picks higher hp
+    do
+        local bucket = { hp = 0, id = 0, }
+        Combat.UpdateBucket(spawnB, bucket, false)
+        assertEq("UpdateBucket prefHigh: first pick", bucket.id, 2)
+        Combat.UpdateBucket(spawnA, bucket, false)
+        assertEq("UpdateBucket prefHigh: higher wins", bucket.id, 1)
+        Combat.UpdateBucket(spawnB, bucket, false)
+        assertEq("UpdateBucket prefHigh: lower ignored", bucket.id, 1)
+    end
+
+    -- PickBestSpawn: no hp pref always takes the spawn unconditionally
+    do
+        local bucket = { hp = 0, id = 0, }
+        Combat.PickBestSpawn(noHpPref, spawnA, bucket)
+        assertEq("PickBestSpawn noHpPref: takes spawn", bucket.id, 1)
+        Combat.PickBestSpawn(noHpPref, spawnB, bucket)
+        assertEq("PickBestSpawn noHpPref: overwrites", bucket.id, 2)
+    end
+
+    -- ProcessXTarget: no namedPref, no hpPref => immediate return of first valid spawn
+    do
+        local primaryTarget  = { hp = 0, id = 0, }
+        local fallbackTarget = { hp = 101, id = 0, name = "None", }
+        -- radius large enough spawn is within; PctAggro=100 bypasses aggro scan
+        local result         = Combat.ProcessXTarget(spawnA, 100, noNamePref, noHpPref, true, primaryTarget, fallbackTarget, false, 0)
+        assertEq("ProcessXTarget noNamePref noHpPref: immediate return", result, 1)
+    end
+
+    -- ProcessXTarget: prefLow, no name pref => primaryTarget bucket updated, no immediate return
+    do
+        local primaryTarget  = { hp = 101, id = 0, }
+        local fallbackTarget = { hp = 101, id = 0, name = "None", }
+        local result         = Combat.ProcessXTarget(spawnA, 100, noNamePref, lowHpPref, false, primaryTarget, fallbackTarget, false, 0)
+        assertEq("ProcessXTarget lowHpPref: no immediate return", result, nil)
+        assertEq("ProcessXTarget lowHpPref: kill bucket updated", primaryTarget.id, 1)
+        Combat.ProcessXTarget(spawnB, 100, noNamePref, lowHpPref, false, primaryTarget, fallbackTarget, false, 0)
+        assertEq("ProcessXTarget lowHpPref: lower hp wins", primaryTarget.id, 2)
+    end
+
+    -- ProcessXTarget: prefNamed, spawn is trash => skipped (primaryTarget bucket unchanged)
+    do
+        local primaryTarget  = { hp = 101, id = 99, }
+        local fallbackTarget = { hp = 101, id = 0, name = "None", }
+        local result         = Combat.ProcessXTarget(spawnA, 100, prefNamed, lowHpPref, false, primaryTarget, fallbackTarget, false, 0)
+        assertEq("ProcessXTarget prefNamed+trash: skipped", primaryTarget.id, 99)
+        assertEq("ProcessXTarget prefNamed+trash: no immediate", result, nil)
+    end
+
+    -- ProcessXTarget: prefNamed, spawn is named, no hpPref => immediate return
+    do
+        local primaryTarget  = { hp = 0, id = 0, }
+        local fallbackTarget = { hp = 101, id = 0, name = "None", }
+        local result         = Combat.ProcessXTarget(spawnC, 100, prefNamed, noHpPref, true, primaryTarget, fallbackTarget, false, 0)
+        assertEq("ProcessXTarget prefNamed+named+immediate: return named", result, 3)
+    end
+
+    -- ProcessXTarget: prefNamed, spawn is named, prefLow => primaryTarget bucket updated
+    do
+        local primaryTarget  = { hp = 101, id = 0, }
+        local fallbackTarget = { hp = 101, id = 0, name = "None", }
+        local result         = Combat.ProcessXTarget(spawnC, 100, prefNamed, lowHpPref, false, primaryTarget, fallbackTarget, false, 0)
+        assertEq("ProcessXTarget prefNamed+named+prefLow: no immediate", result, nil)
+        assertEq("ProcessXTarget prefNamed+named+prefLow: kill updated", primaryTarget.id, 3)
+    end
+
+    -- ProcessXTarget: prefTrash, spawn is trash, no hpPref => immediate return
+    do
+        local primaryTarget  = { hp = 0, id = 0, }
+        local fallbackTarget = { hp = 101, id = 0, name = "None", }
+        local result         = Combat.ProcessXTarget(spawnA, 100, prefTrash, noHpPref, true, primaryTarget, fallbackTarget, false, 0)
+        assertEq("ProcessXTarget prefTrash+trash+immediate: return trash", result, 1)
+    end
+
+    -- ProcessXTarget: prefTrash, spawn is named => goes into fallbackTarget bucket
+    do
+        local primaryTarget  = { hp = 0, id = 0, }
+        local fallbackTarget = { hp = 101, id = 0, name = "None", }
+        local result         = Combat.ProcessXTarget(spawnC, 100, prefTrash, noHpPref, true, primaryTarget, fallbackTarget, false, 0)
+        assertEq("ProcessXTarget prefTrash+named: no immediate", result, nil)
+        assertEq("ProcessXTarget prefTrash+named: kill untouched", primaryTarget.id, 0)
+        assertEq("ProcessXTarget prefTrash+named: named bucket set", fallbackTarget.id, 3)
+        assertEq("ProcessXTarget prefTrash+named: named name set", fallbackTarget.name, "Named")
+    end
+
+    -- ProcessXTarget: prefTrash, named spawn, prefLow => fallbackTarget bucket picks lowest
+    do
+        local spawnD         = mockSpawn(4, "Named2", 30, true)
+        local primaryTarget  = { hp = 0, id = 0, }
+        local fallbackTarget = { hp = 101, id = 0, name = "None", }
+        Combat.ProcessXTarget(spawnC, 100, prefTrash, lowHpPref, false, primaryTarget, fallbackTarget, false, 0)
+        assertEq("ProcessXTarget prefTrash+named+prefLow: first named", fallbackTarget.id, 3)
+        Combat.ProcessXTarget(spawnD, 100, prefTrash, lowHpPref, false, primaryTarget, fallbackTarget, false, 0)
+        assertEq("ProcessXTarget prefTrash+named+prefLow: lower hp named wins", fallbackTarget.id, 4)
+    end
+
+    -- ProcessXTarget: prefNamed, only trash on xtargets, prefHigh => trash goes to fallback, highest hp wins
+    do
+        local primaryTarget  = { hp = 0, id = 0, found = false, }
+        local fallbackTarget = { hp = 0, id = 0, name = "None", }
+        Combat.ProcessXTarget(spawnA, 100, prefNamed, highHpPref, false, primaryTarget, fallbackTarget, false, 0)
+        assertEq("ProcessXTarget prefNamed+trash only: first trash in fallback", fallbackTarget.id, 1)
+        Combat.ProcessXTarget(spawnB, 100, prefNamed, highHpPref, false, primaryTarget, fallbackTarget, false, 0)
+        assertEq("ProcessXTarget prefNamed+trash only: higher hp trash wins", fallbackTarget.id, 1) -- spawnA(80%) beats spawnB(40%)
+        assertEq("ProcessXTarget prefNamed+trash only: primary untouched", primaryTarget.found, false)
+        assertEq("ProcessXTarget prefNamed+trash only: primary id untouched", primaryTarget.id, 0)
+    end
+
+    -- ProcessXTarget: prefTrash, named spawn, prefHigh => fallbackTarget bucket picks highest (regression: primaryTarget.found)
+    do
+        local spawnD         = mockSpawn(4, "Named2", 30, true)
+        local primaryTarget  = { hp = 0, id = 0, found = false, }
+        local fallbackTarget = { hp = 0, id = 0, name = "None", }
+        Combat.ProcessXTarget(spawnC, 100, prefTrash, highHpPref, false, primaryTarget, fallbackTarget, false, 0)
+        assertEq("ProcessXTarget prefTrash+named+prefHigh: first named", fallbackTarget.id, 3)
+        Combat.ProcessXTarget(spawnD, 100, prefTrash, highHpPref, false, primaryTarget, fallbackTarget, false, 0)
+        assertEq("ProcessXTarget prefTrash+named+prefHigh: higher hp named wins", fallbackTarget.id, 3) -- spawnC(60%) beats spawnD(30%)
+        assertEq("ProcessXTarget prefTrash+named+prefHigh: kill not marked found", primaryTarget.found, false)
+    end
+
+    -- Fallback promotion: prefNamed+only trash+prefHigh => fallback promoted to primary id
+    do
+        local primaryTarget  = { hp = 0, id = 0, found = false, }
+        local fallbackTarget = { hp = 0, id = 0, name = "None", }
+        Combat.ProcessXTarget(spawnA, 100, prefNamed, highHpPref, false, primaryTarget, fallbackTarget, false, 0)
+        Combat.ProcessXTarget(spawnB, 100, prefNamed, highHpPref, false, primaryTarget, fallbackTarget, false, 0)
+        if not primaryTarget.found and fallbackTarget.id > 0 then
+            primaryTarget.id = fallbackTarget.id
+        end
+        assertEq("Fallback promotion prefNamed+trash+prefHigh: primary gets fallback id", primaryTarget.id, 1) -- spawnA(80%) is highest
+    end
+
+    -- Fallback promotion: prefTrash+only named+prefLow => fallback promoted to primary id
+    do
+        local spawnD         = mockSpawn(4, "Named2", 30, true)
+        local primaryTarget  = { hp = 101, id = 0, found = false, }
+        local fallbackTarget = { hp = 101, id = 0, name = "None", }
+        Combat.ProcessXTarget(spawnC, 100, prefTrash, lowHpPref, false, primaryTarget, fallbackTarget, false, 0)
+        Combat.ProcessXTarget(spawnD, 100, prefTrash, lowHpPref, false, primaryTarget, fallbackTarget, false, 0)
+        if not primaryTarget.found and fallbackTarget.id > 0 then
+            primaryTarget.id = fallbackTarget.id
+        end
+        assertEq("Fallback promotion prefTrash+named+prefLow: primary gets fallback id", primaryTarget.id, 4) -- spawnD(30%) is lowest
+    end
+
+    Targeting.IsNamed = origIsNamed
+
+    -- ValidMAXTarget tests
+    do
+        local origIsTempPet = Targeting.IsTempPet
+        ---@diagnostic disable-next-line: undefined-field
+        Targeting.IsTempPet = function(spawn) return spawn and spawn._isTempPet or false end
+
+        local function validSpawn(id)
+            local s = mockSpawn(id, "Mob", 80, false)
+            s._isTempPet = false
+            return s
+        end
+
+        -- valid spawn passes all checks
+        assertEq("ValidMAXTarget: valid spawn", Combat.ValidMAXTarget(validSpawn(1)), true)
+
+        -- id == 0 rejected
+        local zeroId = validSpawn(0)
+        assertEq("ValidMAXTarget: id 0 rejected", Combat.ValidMAXTarget(zeroId), false)
+
+        -- dead spawn rejected
+        local dead = validSpawn(2)
+        dead._pctHp = 0
+        assertEq("ValidMAXTarget: dead rejected", Combat.ValidMAXTarget(dead), false)
+
+        -- non-aggressive, non-auto-hater, not forced rejected
+        local passive = validSpawn(3)
+        passive.Aggressive = function() return false end
+        passive.TargetType = function() return "something else" end
+        assertEq("ValidMAXTarget: passive rejected", Combat.ValidMAXTarget(passive), false)
+
+        -- non-aggressive but TargetType == "auto hater" passes
+        local autoHater = validSpawn(4)
+        autoHater.Aggressive = function() return false end
+        autoHater.TargetType = function() return "Auto Hater" end
+        assertEq("ValidMAXTarget: auto hater accepted", Combat.ValidMAXTarget(autoHater), true)
+
+        -- non-aggressive but is the ForceTargetID passes
+        local forced = validSpawn(5)
+        forced.Aggressive = function() return false end
+        forced.TargetType = function() return "something else" end
+        Globals.ForceTargetID = 5
+        assertEq("ValidMAXTarget: forced target accepted", Combat.ValidMAXTarget(forced), true)
+        Globals.ForceTargetID = 0
+
+        -- temp pet rejected
+        local tempPet = validSpawn(6)
+        tempPet._isTempPet = true
+        assertEq("ValidMAXTarget: temp pet rejected", Combat.ValidMAXTarget(tempPet), false)
+
+        -- in ignored list rejected
+        local ignored = validSpawn(7)
+        Globals.IgnoredTargetIDs:add(7)
+        assertEq("ValidMAXTarget: ignored id rejected", Combat.ValidMAXTarget(ignored), false)
+        Globals.IgnoredTargetIDs:remove(7)
+
+        -- in ignored list but force-targeted accepted
+        local forcedIgnored = validSpawn(8)
+        Globals.IgnoredTargetIDs:add(8)
+        Globals.ForceTargetID = 8
+        assertEq("ValidMAXTarget: forced target overrides ignored id", Combat.ValidMAXTarget(forcedIgnored), true)
+        Globals.ForceTargetID = 0
+        Globals.IgnoredTargetIDs:remove(8)
+
+        -- deny name present but ZoneHasDeny false accepted
+        local savedDenyNames, savedHasDeny = Globals.ZoneDenyNames, Globals.ZoneHasDeny
+        Globals.ZoneDenyNames = { mob = true, }
+        Globals.ZoneHasDeny = false
+        assertEq("ValidMAXTarget: deny name inert when ZoneHasDeny false", Combat.ValidMAXTarget(validSpawn(9)), true)
+
+        -- deny active but force-targeted / force-combat accepted
+        Globals.ZoneHasDeny = true
+        Globals.ForceTargetID = 10
+        assertEq("ValidMAXTarget: forced target overrides zone deny", Combat.ValidMAXTarget(validSpawn(10)), true)
+        Globals.ForceTargetID = 0
+        Globals.ForceCombatID = 11
+        assertEq("ValidMAXTarget: forced combat id overrides zone deny", Combat.ValidMAXTarget(validSpawn(11)), true)
+        Globals.ForceCombatID = 0
+        Globals.ZoneDenyNames = savedDenyNames
+        Globals.ZoneHasDeny = savedHasDeny
+
+        Targeting.IsTempPet = origIsTempPet
+    end
+
+    -- IsDeniedTarget tests
+    do
+        Globals.IgnoredTargetIDs:add(36)
+        assertEq("IsDeniedTargetId: session ignored id rejected", Targeting.IsDeniedTargetId(36), true)
+        Globals.ForceTargetID = 36
+        assertEq("IsDeniedTargetId: force target overrides session ignore", Targeting.IsDeniedTargetId(36), false)
+        Globals.ForceTargetID = 0
+        Globals.IgnoredTargetIDs:remove(36)
+
+        assertEq("IsDeniedTargetId: zero id passes", Targeting.IsDeniedTargetId(0), false)
+    end
+
+    -- IsTempPet tests
+    do
+        local function petSpawn(surname)
+            local s = mockSpawn(10, "Test", 80, false)
+            s.Surname = function() return surname end
+            return s
+        end
+
+        assertEq("IsTempPet: apostrophe s Pet", Targeting.IsTempPet(petSpawn("Derple's Pet")), true)
+        assertEq("IsTempPet: backtick s Pet", Targeting.IsTempPet(petSpawn("Derple`s Pet")), true)
+        assertEq("IsTempPet: Doppelganger", Targeting.IsTempPet(petSpawn("Doppelganger")), true)
+        assertEq("IsTempPet: normal mob", Targeting.IsTempPet(petSpawn("Gnoll")), false)
+        assertEq("IsTempPet: nil surname", Targeting.IsTempPet(petSpawn(nil)), false)
+    end
+
+    -- CheckForAggroTargetID tests
+    do
+        Globals.AggroTargetID = 0
+        assertEq("CheckForAggroTargetID: zero returns empty", #Targeting.CheckForAggroTargetID(), 0)
+
+        Globals.AggroTargetID = 42
+        local result = Targeting.CheckForAggroTargetID()
+        assertEq("CheckForAggroTargetID: set returns list", #result, 1)
+        assertEq("CheckForAggroTargetID: set returns correct id", result[1], 42)
+        Globals.AggroTargetID = 0
+    end
+
+    -- InSpellRange tests
+    do
+        local function mockSpell(myRange, aeRange)
+            local s = {}
+            setmetatable(s, { __call = function() return true end, })
+            s.MyRange = function() return myRange end
+            s.AERange = function() return aeRange end
+            return s
+        end
+
+        local nearSpawn = mockSpawn(20, "Near", 80, false, 10) -- distance 10
+        local farSpawn  = mockSpawn(21, "Far", 80, false, 200) -- distance 200
+
+        -- MyRange used when > 0
+        assertEq("InSpellRange: MyRange in range", Targeting.InSpellRange(mockSpell(50, 0), nearSpawn), true)
+        assertEq("InSpellRange: MyRange out of range", Targeting.InSpellRange(mockSpell(50, 0), farSpawn), false)
+
+        -- AERange used when MyRange == 0
+        assertEq("InSpellRange: AERange in range", Targeting.InSpellRange(mockSpell(0, 50), nearSpawn), true)
+        assertEq("InSpellRange: AERange out of range", Targeting.InSpellRange(mockSpell(0, 50), farSpawn), false)
+
+        -- both zero => falls back to 250
+        assertEq("InSpellRange: fallback 250 in range", Targeting.InSpellRange(mockSpell(0, 0), nearSpawn), true)
+        assertEq("InSpellRange: fallback 250 out of range", Targeting.InSpellRange(mockSpell(0, 0), farSpawn), true) -- 200 < 250
+
+        -- nil spell returns false
+        ---@diagnostic disable-next-line: param-type-mismatch
+        assertEq("InSpellRange: nil spell", Targeting.InSpellRange(nil, nearSpawn), false)
+    end
+
+    -- Spawns spawn list compile tests
+    do
+        local Spawns = require("modules.spawns")
+        local shipped = { testzone = { "Shipped Named", { name = "Immunity Mob", named = false, elementalImmunities = { Fire = true, }, }, }, }
+
+        local namedList = Spawns:CompileSpawnList(shipped, {}, "test zone name", "testzone", true)
+        assertEq("CompileSpawnList: shipped string entry named", namedList["shipped named"].named, true)
+        assertEq("CompileSpawnList: immunity-only entry not named", namedList["immunity mob"].named, nil)
+        assertEq("CompileSpawnList: immunity-only entry keeps immunities", namedList["immunity mob"].elementalImmunities.Fire, true)
+
+        -- named tri-state: user false suppresses, true forces, bare row inherits
+        namedList = Spawns:CompileSpawnList(shipped, { testzone = { ["Shipped Named"] = { named = false, }, }, }, "test zone name", "testzone", true)
+        assertEq("CompileSpawnList: user false suppresses shipped named", namedList["shipped named"].named, false)
+        namedList = Spawns:CompileSpawnList(shipped, { testzone = { ["Immunity Mob"] = { named = true, }, }, }, "test zone name", "testzone", true)
+        assertEq("CompileSpawnList: user true forces named", namedList["immunity mob"].named, true)
+        namedList = Spawns:CompileSpawnList(shipped, { testzone = { ["Shipped Named"] = {}, }, }, "test zone name", "testzone", true)
+        assertEq("CompileSpawnList: bare user row inherits shipped named", namedList["shipped named"].named, true)
+
+        -- deny products
+        local _, denyNames, hasDeny = Spawns:CompileSpawnList({}, { testzone = { [" Deny Mob "] = { deny = true, }, }, }, "test zone name", "testzone", true)
+        assertEq("CompileSpawnList: deny key trimmed and lowered", denyNames["deny mob"], true)
+        assertEq("CompileSpawnList: hasDeny set", hasDeny, true)
+        _, denyNames, hasDeny = Spawns:CompileSpawnList({}, { testzone = { ["Deny Mob"] = { named = true, }, }, }, "test zone name", "testzone", true)
+        assertEq("CompileSpawnList: no deny flags no hasDeny", hasDeny, false)
+        assertEq("CompileSpawnList: no deny flags empty set", next(denyNames), nil)
+
+        -- long/short replace rule, per source
+        local shippedBoth = { ["long zone"] = { "Long Shipped", }, shortzone = { "Short Shipped", }, }
+        local userBoth = { ["long zone"] = { ["Long User"] = { named = true, }, }, shortzone = { ["Short User"] = { named = true, }, }, }
+        namedList = Spawns:CompileSpawnList(shippedBoth, userBoth, "long zone", "shortzone", true)
+        assertEq("CompileSpawnList: shipped long replaces shipped short", namedList["long shipped"] ~= nil, true)
+        assertEq("CompileSpawnList: shipped short not consulted", namedList["short shipped"], nil)
+        assertEq("CompileSpawnList: user long replaces user short", namedList["long user"] ~= nil, true)
+        assertEq("CompileSpawnList: user short not consulted", namedList["short user"], nil)
+
+        namedList = Spawns:CompileSpawnList({ ["long zone"] = { "Long Shipped", }, }, { shortzone = { ["Short User"] = { named = true, }, }, }, "long zone", "shortzone", true)
+        assertEq("CompileSpawnList: mixed shipped long used", namedList["long shipped"] ~= nil, true)
+        assertEq("CompileSpawnList: mixed user short used", namedList["short user"] ~= nil, true)
+        namedList = Spawns:CompileSpawnList({ shortzone = { "Short Shipped", }, }, { ["long zone"] = { ["Long User"] = { named = true, }, }, }, "long zone", "shortzone", true)
+        assertEq("CompileSpawnList: mixed shipped short used", namedList["short shipped"] ~= nil, true)
+        assertEq("CompileSpawnList: mixed user long used", namedList["long user"] ~= nil, true)
+
+        -- emptied {} long section falls back to short
+        namedList = Spawns:CompileSpawnList({ ["long zone"] = {}, shortzone = { "Short Shipped", }, }, { ["long zone"] = {}, shortzone = { ["Short User"] = { named = true, }, }, },
+            "long zone", "shortzone", true)
+        assertEq("CompileSpawnList: empty shipped long falls back to short", namedList["short shipped"] ~= nil, true)
+        assertEq("CompileSpawnList: empty user long falls back to short", namedList["short user"] ~= nil, true)
+    end
+
+    -- ===== DEPRECATED MIGRATION TESTS (sunset 1/1/27 - delete this whole block with the Spawns migration) =====
+    -- Spawns registry merge tests
+    do
+        local Spawns = require("modules.spawns")
+        local oldList = {
+            zonea = { ["Conflict Mob"] = { named = true, }, ["Old Only"] = { deny = true, }, },
+            zoneb = { ["Old Zone Mob"] = { named = true, }, },
+        }
+        local newList = {
+            zonea = { ["Conflict Mob"] = { named = false, }, ["New Only"] = { named = true, }, },
+            zonec = { ["New Zone Mob"] = { deny = true, }, },
+        }
+        local merged = Spawns:MergeZoneRegistries(oldList, newList)
+        assertEq("MergeZoneRegistries: conflict pair new wins", merged.zonea["Conflict Mob"].named, false)
+        assertEq("MergeZoneRegistries: old-only pair kept", merged.zonea["Old Only"].deny, true)
+        assertEq("MergeZoneRegistries: new-only pair kept", merged.zonea["New Only"].named, true)
+        assertEq("MergeZoneRegistries: old-only zone kept", merged.zoneb["Old Zone Mob"].named, true)
+        assertEq("MergeZoneRegistries: new-only zone kept", merged.zonec["New Zone Mob"].deny, true)
+        assertEq("MergeZoneRegistries: nil inputs give empty result", next(Spawns:MergeZoneRegistries(nil, nil)), nil)
+    end
+    -- ===== END DEPRECATED MIGRATION TESTS (sunset 1/1/27) =====
+
+    -- Pull ParseLocArgs tests
+    do
+        local Pull = require("modules.pull")
+
+        local loc = Pull:ParseLocArgs("100.5", "-200", "35")
+        assertEq("ParseLocArgs bare yxz: y", loc.y, 100.5)
+        assertEq("ParseLocArgs bare yxz: x", loc.x, -200)
+        assertEq("ParseLocArgs bare yxz: z", loc.z, 35)
+
+        loc = Pull:ParseLocArgs("100", "-200")
+        assertEq("ParseLocArgs bare yx: y", loc.y, 100)
+        assertEq("ParseLocArgs bare yx: x", loc.x, -200)
+        assertEq("ParseLocArgs bare yx: no z", loc.z, nil)
+
+        loc = Pull:ParseLocArgs("xy", "-200", "100")
+        assertEq("ParseLocArgs xy tag: y", loc.y, 100)
+        assertEq("ParseLocArgs xy tag: x", loc.x, -200)
+
+        loc = Pull:ParseLocArgs("locxyz", "-200", "100", "35")
+        assertEq("ParseLocArgs loc prefix: y", loc.y, 100)
+        assertEq("ParseLocArgs loc prefix: x", loc.x, -200)
+        assertEq("ParseLocArgs loc prefix: z", loc.z, 35)
+
+        loc = Pull:ParseLocArgs("587,", "-928,", "30")
+        assertEq("ParseLocArgs comma yxz: y", loc.y, 587)
+        assertEq("ParseLocArgs comma yxz: x", loc.x, -928)
+        assertEq("ParseLocArgs comma yxz: z", loc.z, 30)
+
+        loc = Pull:ParseLocArgs("xy", "587,", "-928")
+        assertEq("ParseLocArgs comma xy tag: x", loc.x, 587)
+        assertEq("ParseLocArgs comma xy tag: y", loc.y, -928)
+
+        loc = Pull:ParseLocArgs("100,200", "30")
+        assertEq("ParseLocArgs split comma pair: y", loc.y, 100)
+        assertEq("ParseLocArgs split comma pair: x", loc.x, 200)
+        assertEq("ParseLocArgs split comma pair: z", loc.z, 30)
+
+        loc = Pull:ParseLocArgs("100,200,30")
+        assertEq("ParseLocArgs single token: y", loc.y, 100)
+        assertEq("ParseLocArgs single token: x", loc.x, 200)
+        assertEq("ParseLocArgs single token: z", loc.z, 30)
+
+        loc = Pull:ParseLocArgs("-100", "-200")
+        assertEq("ParseLocArgs negative pair: y", loc.y, -100)
+        assertEq("ParseLocArgs negative pair: x", loc.x, -200)
+
+        local bad, err = Pull:ParseLocArgs("abc", "1", "2")
+        assertEq("ParseLocArgs invalid tag: nil", bad, nil)
+        assertEq("ParseLocArgs invalid tag: has error", err ~= nil, true)
+
+        bad = Pull:ParseLocArgs("xy", "1")
+        assertEq("ParseLocArgs count mismatch: nil", bad, nil)
+
+        bad = Pull:ParseLocArgs("xy", "1", "bogus")
+        assertEq("ParseLocArgs non-number: nil", bad, nil)
+
+        bad = Pull:ParseLocArgs("1", "2", "3", "4")
+        assertEq("ParseLocArgs four bare coords: nil", bad, nil)
+
+        bad = Pull:ParseLocArgs()
+        assertEq("ParseLocArgs no args: nil", bad, nil)
+    end
+
+    -- Pull mode policy tests
+    do
+        local policies = require("modules.pull").Constants.PullModePolicies
+
+        assertEq("Policy PullToCamp: family", policies['PullToCamp'].family, 'camp')
+        assertEq("Policy ChainToCamp: family", policies['ChainToCamp'].family, 'camp')
+        assertEq("Policy AreaHunt: family", policies['AreaHunt'].family, 'hunt')
+        assertEq("Policy RoamingHunt: family", policies['RoamingHunt'].family, 'hunt')
+        assertEq("Policy CircuitHunt: family", policies['CircuitHunt'].family, 'hunt')
+        assertEq("Policy FightTo: family", policies['FightTo'].family, 'directive')
+
+        for name, policy in pairs(policies) do
+            assertEq(string.format("Policy %s: combat exemption is chain-only", name), policy.runsDuringCombat, name == 'ChainToCamp')
+            assertEq(string.format("Policy %s: chain success check is chain-only", name), policy.successCheck == 'chainCount', name == 'ChainToCamp')
+            assertEq(string.format("Policy %s: rescan-to-closer off only for FightTo", name), policy.rescanToCloser, name ~= 'FightTo')
+            assertEq(string.format("Policy %s: objective only outside roam and circuit", name), policy.hasObjective, name ~= 'RoamingHunt' and name ~= 'CircuitHunt')
+            assertEq(string.format("Policy %s: hunt radius setting", name), policy.radiusSetting == 'PullRadiusHunt', policy.family == 'hunt')
+        end
+
+        assertEq("Policy AreaHunt: anchor scan center", policies['AreaHunt'].scanCenter, 'anchor')
+        assertEq("Policy CircuitHunt: waypoint scan center", policies['CircuitHunt'].scanCenter, 'waypoint')
+        assertEq("Policy RoamingHunt: self scan center", policies['RoamingHunt'].scanCenter, 'self')
+    end
+
+    -- Pull success check tests
+    do
+        local Pull = require("modules.pull")
+
+        assertEq("PullSuccessCheck any: no haters", Pull:PullSuccessCheck('any', 0, 3), false)
+        assertEq("PullSuccessCheck any: one hater", Pull:PullSuccessCheck('any', 1, 3), true)
+        assertEq("PullSuccessCheck chainCount: below count", Pull:PullSuccessCheck('chainCount', 2, 3), false)
+        assertEq("PullSuccessCheck chainCount: at count", Pull:PullSuccessCheck('chainCount', 3, 3), true)
+        assertEq("PullSuccessCheck chainCount: above count", Pull:PullSuccessCheck('chainCount', 4, 3), true)
+    end
+
+    -- Pull abort profile tests
+    do
+        local Pull = require("modules.pull")
+
+        local function baseCtx(overrides)
+            local abortCtx = {
+                pausePulls = false,
+                pullListUpdated = false,
+                doPull = true,
+                pauseMain = false,
+                spawnGone = false,
+                navigating = false,
+                attemptSafePulling = false,
+                strangerNear = false,
+                graceExpired = false,
+                distance = 100,
+                maxPathRange = 1000,
+                pathExists = true,
+                timedOut = false,
+            }
+            for k, v in pairs(overrides or {}) do abortCtx[k] = v end
+            return abortCtx
+        end
+
+        local manualAttempt = { source = 'manual', }
+        local scanAttempt = { source = 'scan', }
+        local objectiveAttempt = { source = 'objective', }
+
+        for _, attempt in ipairs({ manualAttempt, scanAttempt, objectiveAttempt, }) do
+            assertEq(string.format("DecideAbort %s: clean ctx", attempt.source), Pull:DecideAbort(attempt, baseCtx()), nil)
+            assertEq(string.format("DecideAbort %s: paused", attempt.source), Pull:DecideAbort(attempt, baseCtx({ pausePulls = true, })), 'paused')
+            assertEq(string.format("DecideAbort %s: list updated", attempt.source), Pull:DecideAbort(attempt, baseCtx({ pullListUpdated = true, })), 'listUpdated')
+            assertEq(string.format("DecideAbort %s: pause main", attempt.source), Pull:DecideAbort(attempt, baseCtx({ pauseMain = true, })), 'disabled')
+            assertEq(string.format("DecideAbort %s: spawn gone", attempt.source), Pull:DecideAbort(attempt, baseCtx({ spawnGone = true, })), 'spawnGone')
+        end
+
+        assertEq("DecideAbort manual: DoPull off exempt", Pull:DecideAbort(manualAttempt, baseCtx({ doPull = false, })), nil)
+        assertEq("DecideAbort scan: DoPull off aborts", Pull:DecideAbort(scanAttempt, baseCtx({ doPull = false, })), 'disabled')
+        assertEq("DecideAbort objective: DoPull off aborts", Pull:DecideAbort(objectiveAttempt, baseCtx({ doPull = false, })), 'disabled')
+
+        assertEq("DecideAbort scan: too far", Pull:DecideAbort(scanAttempt, baseCtx({ distance = 1001, })), 'tooFar')
+        assertEq("DecideAbort scan: no path", Pull:DecideAbort(scanAttempt, baseCtx({ pathExists = false, })), 'noPath')
+        assertEq("DecideAbort scan: stranger", Pull:DecideAbort(scanAttempt, baseCtx({ attemptSafePulling = true, strangerNear = true, })), 'stranger')
+        assertEq("DecideAbort scan: stranger needs the setting on", Pull:DecideAbort(scanAttempt, baseCtx({ strangerNear = true, })), nil)
+        assertEq("DecideAbort scan: timeout", Pull:DecideAbort(scanAttempt, baseCtx({ timedOut = true, })), 'timeout')
+        assertEq("DecideAbort scan: timeout inactive while navigating", Pull:DecideAbort(scanAttempt, baseCtx({ timedOut = true, navigating = true, })), nil)
+
+        assertEq("DecideAbort objective: stranger", Pull:DecideAbort(objectiveAttempt, baseCtx({ attemptSafePulling = true, strangerNear = true, })), 'stranger')
+        assertEq("DecideAbort objective: unreachable grace", Pull:DecideAbort(objectiveAttempt, baseCtx({ graceExpired = true, })), 'unreachable')
+        assertEq("DecideAbort objective: no distance abort", Pull:DecideAbort(objectiveAttempt, baseCtx({ distance = 1001, })), nil)
+        assertEq("DecideAbort objective: timeout", Pull:DecideAbort(objectiveAttempt, baseCtx({ timedOut = true, })), 'objectiveTimeout')
+
+        assertEq("DecideAbort manual: exempt from scan arm",
+            Pull:DecideAbort(manualAttempt, baseCtx({ distance = 1001, pathExists = false, attemptSafePulling = true, strangerNear = true, })), nil)
+        assertEq("DecideAbort manual: exempt from objective arm",
+            Pull:DecideAbort(manualAttempt, baseCtx({ attemptSafePulling = true, strangerNear = true, graceExpired = true, })), nil)
+
+        assertEq("DecideUserAbort: clean ctx", Pull:DecideUserAbort(baseCtx(), 'scan'), nil)
+        assertEq("DecideUserAbort: paused", Pull:DecideUserAbort(baseCtx({ pausePulls = true, }), 'scan'), 'paused')
+        assertEq("DecideUserAbort: list updated", Pull:DecideUserAbort(baseCtx({ pullListUpdated = true, }), 'scan'), 'listUpdated')
+        assertEq("DecideUserAbort: pause main", Pull:DecideUserAbort(baseCtx({ pauseMain = true, }), 'scan'), 'disabled')
+        assertEq("DecideUserAbort: DoPull off aborts", Pull:DecideUserAbort(baseCtx({ doPull = false, }), 'scan'), 'disabled')
+        assertEq("DecideUserAbort: manual exempt from DoPull off", Pull:DecideUserAbort(baseCtx({ doPull = false, }), 'manual'), nil)
+    end
+
+    -- Pull intent sentence tests
+    do
+        local Pull = require("modules.pull")
+        local loc = { y = 100, x = -200, z = 35, }
+
+        local function checkSentence(label, result, expectCanStart, expectGap)
+            assertEq(label .. ": canStart", result.canStart, expectCanStart)
+            assertEq(label .. ": gapReason", result.gapReason, expectGap)
+            assertEq(label .. ": text non-empty", #result.text > 0, true)
+            assertEq(label .. ": ends with period", result.text:sub(-1), ".")
+        end
+
+        -- Camp family: camp-here, solo and managed for each scope
+        checkSentence("Intent PullToCamp here solo",
+            Pull:BuildIntentSentence({ mode = "PullToCamp", scope = 1, locationSet = false, manageMovement = false, }), true, nil)
+        checkSentence("Intent PullToCamp here group manage",
+            Pull:BuildIntentSentence({ mode = "PullToCamp", scope = 1, locationSet = false, manageMovement = true, }), true, nil)
+        checkSentence("Intent PullToCamp here zone manage",
+            Pull:BuildIntentSentence({ mode = "PullToCamp", scope = 2, locationSet = false, manageMovement = true, }), true, nil)
+
+        -- Camp family: ChainToCamp happy path
+        checkSentence("Intent ChainToCamp here solo",
+            Pull:BuildIntentSentence({ mode = "ChainToCamp", scope = 1, locationSet = false, manageMovement = false, }), true, nil)
+
+        -- Camp family: remote camp, solo travel or managed escort
+        checkSentence("Intent PullToCamp remote solo",
+            Pull:BuildIntentSentence({ mode = "PullToCamp", scope = 1, locationSet = true, loc = loc, manageMovement = false, }), true, nil)
+        checkSentence("Intent PullToCamp remote group manage",
+            Pull:BuildIntentSentence({ mode = "PullToCamp", scope = 1, locationSet = true, loc = loc, manageMovement = true, }), true, nil)
+        checkSentence("Intent PullToCamp remote zone manage",
+            Pull:BuildIntentSentence({ mode = "PullToCamp", scope = 2, locationSet = true, loc = loc, manageMovement = true, }), true, nil)
+
+        -- Hunt family
+        checkSentence("Intent AreaHunt with loc",
+            Pull:BuildIntentSentence({ mode = "AreaHunt", locationSet = true, loc = loc, }), true, nil)
+        checkSentence("Intent AreaHunt with loc manage",
+            Pull:BuildIntentSentence({ mode = "AreaHunt", locationSet = true, loc = loc, manageMovement = true, }), true, nil)
+        checkSentence("Intent AreaHunt no loc",
+            Pull:BuildIntentSentence({ mode = "AreaHunt", locationSet = false, }), true, nil)
+        checkSentence("Intent RoamingHunt",
+            Pull:BuildIntentSentence({ mode = "RoamingHunt", }), true, nil)
+        checkSentence("Intent RoamingHunt manage",
+            Pull:BuildIntentSentence({ mode = "RoamingHunt", manageMovement = true, }), true, nil)
+        checkSentence("Intent CircuitHunt with waypoints",
+            Pull:BuildIntentSentence({ mode = "CircuitHunt", hasWaypoints = true, }), true, nil)
+        checkSentence("Intent CircuitHunt with waypoints manage",
+            Pull:BuildIntentSentence({ mode = "CircuitHunt", hasWaypoints = true, manageMovement = true, }), true, nil)
+        checkSentence("Intent CircuitHunt no waypoints",
+            Pull:BuildIntentSentence({ mode = "CircuitHunt", hasWaypoints = false, }), false, "Add an enabled pull location to run a circuit.")
+
+        -- Directive family
+        checkSentence("Intent FightTo spawn",
+            Pull:BuildIntentSentence({ mode = "FightTo", fightToKind = "spawn", fightToName = "Fippy Darkpaw", }), true, nil)
+        checkSentence("Intent FightTo spawn manage",
+            Pull:BuildIntentSentence({ mode = "FightTo", fightToKind = "spawn", fightToName = "Fippy Darkpaw", manageMovement = true, scope = 2, }), true, nil)
+        checkSentence("Intent FightTo loc",
+            Pull:BuildIntentSentence({ mode = "FightTo", fightToKind = "loc", loc = loc, }), true, nil)
+        checkSentence("Intent FightTo none",
+            Pull:BuildIntentSentence({ mode = "FightTo", fightToKind = "none", }), false, "Set a Fight To target first.")
+    end
+
+    -- Pull list set compile tests
+    do
+        local Pull = require("modules.pull")
+
+        local personal = { "Fippy Darkpaw", " a gnoll pup ", "MISCASED Mob", }
+        local shared = { "Shared Only", }
+
+        local set, hasEntries = Pull:CompilePullListSet(personal, shared, false)
+        assertEq("CompilePullListSet: personal has entries", hasEntries, true)
+        assertEq("CompilePullListSet: miscased entry live after folding", set["miscased mob"], true)
+        assertEq("CompilePullListSet: spaced entry trimmed", set["a gnoll pup"], true)
+        for _, candidate in ipairs({ "Fippy Darkpaw", "fippy darkpaw", " a gnoll pup ", "a gnoll pup", "MISCASED Mob", "miscased mob", "Unlisted Mob", "Shared Only", }) do
+            local found = false
+            for _, name in ipairs(personal) do
+                if Strings.TrimSpaces(name):lower() == Strings.TrimSpaces(candidate):lower() then found = true end
+            end
+            assertEq(string.format("CompilePullListSet: parity for '%s'", candidate), set[Strings.TrimSpaces(candidate):lower()] == true, found)
+        end
+
+        set, hasEntries = Pull:CompilePullListSet(personal, shared, true)
+        assertEq("CompilePullListSet: useShared selects shared list", set["shared only"], true)
+        assertEq("CompilePullListSet: useShared excludes personal list", set["fippy darkpaw"], nil)
+        assertEq("CompilePullListSet: shared has entries", hasEntries, true)
+
+        set, hasEntries = Pull:CompilePullListSet({}, shared, false)
+        assertEq("CompilePullListSet: empty active list no entries", hasEntries, false)
+        assertEq("CompilePullListSet: empty active list empty set", next(set), nil)
+    end
+
+    Logger.log_info("UnitTests: Self tests complete. Passed: %d, Failed: %d", passed, failed)
+    return failed == 0
+end
+
+return UnitTests

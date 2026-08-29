@@ -1,0 +1,1188 @@
+-- Sample Basic Class Module
+local mq        = require('mq')
+local Icons     = require('mq.ICONS')
+local Set       = require("mq.Set")
+local Base      = require("modules.base")
+local Casting   = require("utils.casting")
+local Combat    = require('utils.combat')
+local Comms     = require("utils.comms")
+local Config    = require('utils.config')
+local Core      = require("utils.core")
+local Globals   = require('utils.globals')
+local Logger    = require("utils.logger")
+local Math      = require('utils.math')
+local Movement  = require("utils.movement")
+local Strings   = require("utils.strings")
+local Targeting = require("utils.targeting")
+local Ui        = require("utils.ui")
+
+local Module    = { _version = '0.1a', _name = "Movement", _author = 'Derple', }
+Module.__index  = Module
+setmetatable(Module, { __index = Base, })
+
+Module.TempSettings                = {}
+Module.TempSettings.CampZoneId     = 0
+Module.TempSettings.CampInstanceId = 0
+Module.TempSettings.DeathCampHold  = false
+Module.TempSettings.NavWasActive   = false
+
+Module.Constants                   = {}
+Module.Constants.GGHZones          = Set.new({ "poknowledge", "potranquility", "stratos", "guildlobby", "moors", "crescent", "guildhalllrg_int", "guildhall", })
+Module.Constants.CampfireNameToKit = {
+    ['Regular Fellowship']           = 1,
+    ['Empowered Fellowship']         = 2,
+    ['Empowered Barbarian']          = 3,
+    ['Empowered Dark Elf']           = 4,
+    ['Empowered Dwarf']              = 5,
+    ['Empowered Erudite']            = 6,
+    ['Empowered Gnome']              = 7,
+    ['Empowered Half Elf']           = 8,
+    ['Empowered Halfling']           = 9,
+    ['Empowered High Elf']           = 10,
+    ['Empowered Human']              = 11,
+    ['Empowered Iksar']              = 12,
+    ['Empowered Ogre']               = 13,
+    ['Empowered Troll']              = 14,
+    ['Empowered Vah Shir']           = 15,
+    ['Empowered Woodelf']            = 16,
+    ['Empowered Guktan']             = 17,
+    ['Empowered Drakkin']            = 18,
+    ['Empowered Earthen Elemental']  = 19,
+    ['Empowered Aery Elemental']     = 20,
+    ['Empowered Firey Elemental']    = 21,
+    ['Empowered Aqueous Elemental']  = 22,
+    ['Empowered Spirit Wolf']        = 23,
+    ['Empowered Werewolf']           = 24,
+    ['Empowered Evil Eye']           = 25,
+    ['Empowered Imp']                = 26,
+    ['Empowered Froglok']            = 27,
+    ['Empowered Scarecrow']          = 28,
+    ['Empowered Skeleton']           = 29,
+    ['Empowered Drybone Skeleton']   = 30,
+    ['Empowered Frostbone Skeleton'] = 31,
+    ['Empowered Orc']                = 32,
+    ['Empowered Goblin']             = 33,
+    ['Empowered Sporali']            = 34,
+    ['Empowered Fairy']              = 35,
+    ['Scaled Wolf']                  = 36,
+}
+
+
+Module.Constants.CampfireTypes = { 'All Off', }
+for t, _ in pairs(Module.Constants.CampfireNameToKit) do table.insert(Module.Constants.CampfireTypes, t) end
+table.sort(Module.Constants.CampfireTypes)
+
+Module.FAQ             = {
+    {
+        Question = "How do I move my PCs or have them follow my driver?",
+        Answer =
+            "Enable \"Chase\" on the Movement tab (or via Command-Line, refer to the command list) and adjust settings in the Following category (Movement Options) to your liking.\n" ..
+            "There are two commonly used forms of following in MQ currently: \"Nav\" and \"A(dvanced)Follow\".\n\n" ..
+            "Nav uses the MQ2Nav plugin to check zone geometry to move from point-to-point. This is the type of movement that RGMercs uses by default.\n\n" ..
+            "Afollow, which is a feature of MQ2AdvPath, uses recording and playback of player movement to mimic the PC being followed. This is the type of nav typically seen on \"Follow Me\" buttons in the group window.\n\n" ..
+            "There are times when Chase(Nav) and Afollow both have advantages, so situationally using both is common. Please note that using Afollow may interfere with RGMercs movement, meditation, or casting while it is enabled!",
+        Settings_Used = "",
+    },
+    {
+        Question = "What is a camp in RGMercs? How do I use one?",
+        Answer = "Camping is setting a tether to a particular location.\n\n" ..
+            "Rather than chasing/following another PC, you will continually return to the vicinity of the camp location you've set.\n\n" ..
+            "This mode is mutually-exclusive with Chase, i.e, you cannot Chase and Camp at the same time.\n" ..
+            "Enabling one disables the other.\n" ..
+            "Camp settings can be adjusted in the Following category (Movement Options).",
+        Settings_Used = "",
+    },
+}
+
+Module.DefaultConfig   = {
+    --Custom
+    ['ReturnToCamp']                           = {
+        DisplayName = "Return To Camp",
+        Type = "Custom",
+        Default = false,
+        FAQ = "How do I set a camp?",
+        Answer = "You can set a camp using a button on the Movement tab, or by using the campon command (see command list) .",
+        OnChange = function(self) Movement.UpdateMapRadii() end,
+    },
+    [string.format("%s_Popped", Module._name)] = {
+        DisplayName = Module._name .. " Popped",
+        Type = "Custom",
+        Default = false,
+    },
+    ['ChaseTarget']                            = {
+        DisplayName = "Chase Target",
+        Type = "Custom",
+        Default = "",
+        FAQ = "How do I set my chase target?",
+        Answer = "You can set your chase target using a button on the Movement tab, or by using the chaseon command (see command list).",
+    },
+    -- Chase
+    ['ChaseOn']                                = {
+        DisplayName = "Chase On",
+        Group = "Movement",
+        Header = "Following",
+        Category = "Chase",
+        Index = 1,
+        Tooltip = "Follow the Chase target using MQ2Nav. Requires navmeshes!",
+        Default = false,
+        OnChange = function(oldVal, newVal)
+            if newVal then
+                Config:SetSetting('ManualMode', false, false, true)
+            end
+        end,
+    },
+    ['RunMovePaused']                          = {
+        DisplayName = "Chase or Camp While Paused",
+        Group = "Movement",
+        Header = "Following",
+        Category = "Chase",
+        Index = 2,
+        Tooltip = "Continue to follow your chase target or return to camp, even if RGMercs is paused.",
+        Default = true,
+    },
+    ['ChaseDistance']                          = {
+        DisplayName = "Chase Distance",
+        Group = "Movement",
+        Header = "Following",
+        Category = "Chase",
+        Index = 3,
+        Tooltip = "The distance away from our chase target before we will begin to navigate to them. (This starts chase movement.)",
+        Default = 25,
+        Min = 5,
+        Max = 100,
+        Warning = function()
+            if Config:GetSetting('ChaseStopDistance') > Config:GetSetting('ChaseDistance') then
+                return true, "Warning: ChaseStopDistance exceeds ChaseDistance this will cause chase to fail."
+            end
+            return false, ""
+        end,
+    },
+    ['ChaseStopDistance']                      = {
+        DisplayName = "Chase Stop Distance",
+        Group = "Movement",
+        Header = "Following",
+        Category = "Chase",
+        Index = 4,
+        Tooltip = "The distance to our chase target to end navigation to them. (This ends chase movement.) High run speed may overshoot this value.",
+        Default = 25,
+        Min = 5,
+        Max = 100,
+        Warning = function()
+            if Config:GetSetting('ChaseStopDistance') > Config:GetSetting('ChaseDistance') then
+                return true, "Warning: ChaseStopDistance exceeds ChaseDistance this will cause chase to fail."
+            end
+            return false, ""
+        end,
+    },
+    ['RequireLoS']                             = {
+        DisplayName = "Require LOS",
+        Group = "Movement",
+        Header = "Following",
+        Category = "Chase",
+        Index = 5,
+        Tooltip = "Require Line-of-Sight to the chase target before navigation to them is ended.",
+        Default = true,
+        ConfigType = "Advanced",
+    },
+    ['PriorityFollow']                         = {
+        DisplayName = "Prioritize Follow",
+        Group = "Movement",
+        Header = "Following",
+        Category = "Chase",
+        Index = 6,
+        Tooltip =
+        "Prioritize staying in range of the Chase Target over any other actions. This will prevent any rotations (heals, buffs, etc, to include bard songs) from being processed if we are out of range of the chase target.",
+        Default = false,
+        ConfigType = "Advanced",
+    },
+    ['BreakOnDeath']                           = {
+        DisplayName = "Break On Death",
+        Group = "Movement",
+        Header = "Following",
+        Category = "Chase",
+        Index = 7,
+        Tooltip = "Stop chasing after when you die.",
+        Default = false,
+        ConfigType = "Advanced",
+    },
+    ['UseActorNav']                            = {
+        DisplayName = "Use Actor Nav",
+        Group = "Movement",
+        Header = "Following",
+        Category = "Chase",
+        Index = 8,
+        Tooltip =
+        "Use location data reported directly by RGMercs from the chase target to conduct chase checks and navigation if needed. May be useful if you notice PCs trying to chase your target to a stale location.",
+        Default = true,
+        ConfigType = "Advanced",
+    },
+    ['AttemptToFixStuck']                      = {
+        DisplayName = "Attempt To Fix Stuck",
+        Group = "Movement",
+        Header = "Following",
+        Category = "Chase",
+        Index = 9,
+        Tooltip = "If we become stuck while chasing, attempt to fix it by toggling your height via MQ2AutoSize - requires MQ2AutoSize plugin.",
+        Default = true,
+    },
+    ['AttemptToFixStuckTimer']                 = {
+        DisplayName = "Stuck Fix Timer",
+        Group = "Movement",
+        Header = "Following",
+        Category = "Chase",
+        Index = 10,
+        Tooltip = "The number of seconds we must be stuck before attempting to fix it.",
+        Default = 5,
+        Min = 1,
+        Max = 600,
+        ConfigType = "Advanced",
+    },
+    ['ChaseInCombat']                          = {
+        DisplayName = "Chase In Combat",
+        Group = "Movement",
+        Header = "Following",
+        Category = "Chase",
+        Index = 11,
+        Tooltip = "Continue chase movement even while an XTarget hater is within Assist Range.",
+        Default = false,
+    },
+
+
+    -- Camp
+    ['AutoCampRadius']     = {
+        DisplayName = "Camp Radius",
+        Group = "Movement",
+        Header = "Following",
+        Category = "Camp",
+        Index = 1,
+        Tooltip = "The distance to allow from camp before returning to it.",
+        Default = 100,
+        Min = 10,
+        Max = 300,
+        Warning = function()
+            if Config:GetSetting('CampExceedRadius') <= Config:GetSetting('AutoCampRadius') then
+                return true, "Warning: Camp Exceed Distance is at or below Camp Radius - camp will turn off as soon as you exceed the radius."
+            end
+            return false, ""
+        end,
+        OnChange = function(self) Movement.UpdateMapRadii() end,
+    },
+    ['CampLeashDowntime']  = {
+        DisplayName = "Leash to Camp (Downtime)",
+        Group = "Movement",
+        Header = "Following",
+        Category = "Camp",
+        Index = 2,
+        Tooltip = "Return to the exact camp location outside of combat, even if we are within the Camp Radius.",
+        Default = false,
+    },
+    ['CampLeashCombat']    = {
+        DisplayName = "Leash to Camp (Combat)",
+        Group = "Movement",
+        Header = "Following",
+        Category = "Camp",
+        Index = 3,
+        Tooltip = "Return to the exact camp location during combat if we leave the Camp Radius.",
+        Default = false,
+        Warning = function()
+            if Config:GetSetting('AssistRange') > Config:GetSetting('AutoCampRadius') then
+                return true, "Warning: AssistRange exceeds Camp Radius - the combat leash will pull characters back from engagements past the radius."
+            end
+            return false, ""
+        end,
+    },
+    ['CampExceedRadius']   = {
+        DisplayName = "Camp Exceed Distance",
+        Group = "Movement",
+        Header = "Following",
+        Category = "Camp",
+        Index = 4,
+        Tooltip = "Turn camp off if not pulling and your current distance from the camp is greater than this value.",
+        Default = 400,
+        Min = 100,
+        Max = 2000,
+        Warning = function()
+            if Config:GetSetting('CampExceedRadius') <= Config:GetSetting('AutoCampRadius') then
+                return true, "Warning: Camp Exceed Distance is at or below Camp Radius - camp will turn off as soon as you exceed the radius."
+            end
+            return false, ""
+        end,
+        ConfigType = "Advanced",
+    },
+    ['MaintainCampfire']   = {
+        DisplayName = "Maintain Campfire",
+        Group = "Movement",
+        Header = "Following",
+        Category = "Camp",
+        Index = 5,
+        Tooltip = "Official Servers: Maintain the selected Fellowship Campfire.",
+        Type = "Combo",
+        ComboOptions = Module.Constants.CampfireTypes,
+        Default = 1,
+        Min = 1,
+        Max = #Module.Constants.CampfireTypes,
+    },
+    ['DoFellow']           = {
+        DisplayName = "Enable Fellowship Insignia",
+        Group = "Movement",
+        Header = "Following",
+        Category = "Camp",
+        Index = 6,
+        Tooltip = "Official Servers: Use your fellowship insignia to automatically return to the zone you were camped in after death.",
+        Default = false,
+        ConfigType = "Advanced",
+    },
+    ['PeerMovementScope']  = {
+        DisplayName = "Peer Movement Scope",
+        Type = "Custom",
+        Default = 1,
+        ComboOptions = { "Group / Raid", "In-Zone", },
+        Tooltip = "Who Manage Peer Movement affects: peers in your group / raid, or every RGMercs peer in your zone.",
+        FAQ = "What does Peer Movement Scope change?",
+        Answer = "It sets who Manage Peer Movement affects: peers in your group / raid, or every RGMercs peer in your zone.",
+    },
+    ['ManagePeerMovement'] = {
+        DisplayName = "Manage Peer Movement",
+        Type = "Custom",
+        Default = true,
+        Tooltip = "When on, camp and chase actions bring the selected peers along with you.",
+        FAQ = "How do I move my group along with me?",
+        Answer = "Turn on Manage Peer Movement and pick a scope; the Movement tab's camp and chase buttons - and pulling - then act on those peers along with you.",
+    },
+}
+
+Module.CommandHandlers = {
+    chaseon = {
+        usage = "/rgl chaseon <name?>",
+        about = "Chase <name>. If no name is supplied, it will fall back in order: (Last Used Chase Target > Main Assist). Clears your camp.",
+        handler = function(self, params)
+            self:ChaseOn(params)
+        end,
+    },
+    chaseoff = {
+        usage = "/rgl chaseoff",
+        about = "Stop chasing your current chase target.",
+        handler = function(self, _)
+            self:ChaseOff()
+        end,
+    },
+    campon = {
+        usage = "/rgl campon",
+        about = "Set a camp here. Disables Chase.",
+        handler = function(self, _)
+            self:CampOn()
+        end,
+    },
+    campoff = {
+        usage = "/rgl campoff",
+        about = "Clear your current camp.",
+        handler = function(self, _)
+            self:CampOff()
+        end,
+    },
+}
+
+function Module:New()
+    return Base.New(self)
+end
+
+function Module:ChaseOn(nameParam)
+    local currentChase = Config:GetSetting('ChaseTarget')
+
+    -- if no name passed, use current chase target
+    local targetName = nameParam or (currentChase ~= "" and currentChase)
+
+    -- being told to chase ourselves means we're the chase target; stop chasing whoever we were following.
+    if targetName == mq.TLO.Me.CleanName() then
+        Logger.log_warn("\ayWarning: Attempting to chase yourself, stopping chase instead.")
+        self:CampOff()
+        self:ChaseOff()
+        return
+    end
+
+    -- if no current chase target, use MA
+    local chaseTarget = targetName and mq.TLO.Spawn("pc =" .. targetName) or Core.GetMainAssistSpawn()
+
+    if chaseTarget and chaseTarget() and chaseTarget.ID() > 0 and chaseTarget.ID() ~= mq.TLO.Me.ID() then
+        self:CampOff()
+        Config:SetSetting('ChaseOn', true)
+        Config:SetSetting('ChaseTarget', chaseTarget.CleanName())
+        Logger.log_info("\aoNow Chasing \ag%s", chaseTarget.CleanName())
+    else
+        Logger.log_warn("\ayWarning:\ax No valid chase target!")
+    end
+end
+
+function Module:ChaseOff()
+    if Config:GetSetting('ChaseOn') == false then return end
+    Logger.log_info("\ayNo longer chasing \at%s\ay.", Config:GetSetting('ChaseTarget') or "None")
+    Config:SetSetting('ChaseOn', false)
+    Config:SetSetting('ChaseTarget', "")
+    Movement:DoNav(true, "stop")
+end
+
+function Module:CampOn()
+    self:ChaseOff()
+    Config:SetSetting('ReturnToCamp', true)
+    self.TempSettings.AutoCampX      = mq.TLO.Me.X()
+    self.TempSettings.AutoCampY      = mq.TLO.Me.Y()
+    self.TempSettings.AutoCampZ      = mq.TLO.Me.Z()
+    self.TempSettings.CampZoneId     = mq.TLO.Zone.ID()
+    self.TempSettings.CampInstanceId = mq.TLO.Me.Instance()
+    Logger.log_info("\ayCamping On: (X: \at%d\ay ; Y: \at%d\ay)", self.TempSettings.AutoCampX, self.TempSettings.AutoCampY)
+    self.TempSettings.DeathCampHold = false
+end
+
+---@return table # camp settings table
+function Module:GetCampData()
+    return {
+        returnToCamp = Config:GetSetting('ReturnToCamp') and self.TempSettings.CampZoneId == mq.TLO.Zone.ID() and
+            self.TempSettings.CampInstanceId == mq.TLO.Me.Instance(),
+        campSettings = self.TempSettings,
+        deathCampHold = self.TempSettings.DeathCampHold or false,
+    }
+end
+
+---@return boolean
+function Module:InCampZone()
+    return self.TempSettings.CampZoneId == mq.TLO.Zone.ID() and self.TempSettings.CampInstanceId == mq.TLO.Me.Instance()
+end
+
+function Module:CampOff()
+    Config:SetSetting('ReturnToCamp', false)
+    self.TempSettings.DeathCampHold = false
+end
+
+--- Returns the peer list for the peer movement buttons, honoring the selected scope.
+function Module:MovePeers(includeSelf)
+    if Config:GetSetting('PeerMovementScope') == 2 then return Comms.GetZonePeers(includeSelf) end
+    return (mq.TLO.Raid.Members() or 0) > 0 and Comms.GetRaidPeers(includeSelf) or Comms.GetGroupPeers(includeSelf)
+end
+
+--- Keeps the camp through a death - zoning out to bind would normally drop it - so pulling can resume when we make it back.
+function Module:ArmDeathCampHold()
+    if not Config:GetSetting('ReturnToCamp') then return end
+    self.TempSettings.DeathCampHold = true
+end
+
+--- Releases the death hold; the camp follows normal rules again.
+function Module:ClearDeathCampHold()
+    self.TempSettings.DeathCampHold = false
+end
+
+function Module:DestoryCampfire()
+    if mq.TLO.Me.Fellowship.Campfire() == nil then return end
+    Logger.log_debug("DestoryCampfire()")
+
+    mq.TLO.Window("FellowshipWnd").DoOpen()
+    mq.delay("3s", function() return mq.TLO.Window("FellowshipWnd").Open() == true end)
+    mq.TLO.Window("FellowshipWnd").Child("FP_Subwindows").SetCurrentTab(2)
+
+    if mq.TLO.Me.Fellowship.Campfire() then
+        mq.TLO.Window("FellowshipWnd").Child("FP_DestroyCampsite").LeftMouseUp()
+        mq.delay("5s", function() return mq.TLO.Window("ConfirmationDialogBox").Open() == true end)
+
+        if mq.TLO.Window("ConfirmationDialogBox").Open() == true then
+            mq.TLO.Window("ConfirmationDialogBox").Child("Yes_Button").LeftMouseUp()
+        end
+
+        mq.delay("5s", function() return mq.TLO.Me.Fellowship.Campfire() == nil end)
+    end
+    mq.TLO.Window("FellowshipWnd").DoClose()
+end
+
+function Module:GetCampfireTypeName()
+    return self.DefaultConfig.MaintainCampfire.ComboOptions[Config:GetSetting('MaintainCampfire')]
+end
+
+function Module:GetCampfireTypeID()
+    return self.Constants.CampfireNameToKit[self:GetCampfireTypeName()] or 0
+end
+
+function Module:Campfire(camptype)
+    if camptype == -1 then
+        self:DestoryCampfire()
+        return
+    end
+
+    if mq.TLO.Zone.ID() == 33506 then return end
+
+    if mq.TLO.Me.Fellowship.ID() == 0 or mq.TLO.Me.Fellowship.Campfire() then
+        Logger.log_super_verbose("\arNot in a fellowship or already have a campfire -- not putting one down.")
+        return
+    end
+
+    if Config:GetSetting('MaintainCampfire') > 2 then
+        if mq.TLO.FindItemCount("Fellowship Campfire Materials")() == 0 then
+            Config:SetSetting('MaintainCampfire', 36) -- Regular Fellowship
+            Logger.log_info("Fellowship Campfire Materials Not Found. Setting to Regular Fellowship.")
+        end
+    end
+
+    local spawnCount  = mq.TLO.SpawnCount("PC radius 100")()
+    local fellowCount = 0
+
+    for i = 1, spawnCount do
+        local spawn = mq.TLO.NearestSpawn(i, "PC radius 100")
+
+        if spawn() and mq.TLO.Me.Fellowship.Member(spawn.CleanName()) then
+            fellowCount = fellowCount + 1
+        end
+    end
+
+    if fellowCount >= 3 then
+        mq.TLO.Window("FellowshipWnd").DoOpen()
+        mq.delay("3s", function() return mq.TLO.Window("FellowshipWnd").Open() == true end)
+        mq.TLO.Window("FellowshipWnd").Child("FP_Subwindows").SetCurrentTab(2)
+
+        if mq.TLO.Me.Fellowship.Campfire() then
+            if mq.TLO.Zone.ID() ~= mq.TLO.Me.Fellowship.CampfireZone.ID() then
+                mq.TLO.Window("FellowshipWnd").Child("FP_DestroyCampsite").LeftMouseUp()
+                mq.delay("5s", function() return mq.TLO.Window("ConfirmationDialogBox").Open() == true end)
+
+                if mq.TLO.Window("ConfirmationDialogBox").Open() == true then
+                    mq.TLO.Window("ConfirmationDialogBox").Child("Yes_Button").LeftMouseUp()
+                end
+
+                mq.delay("5s", function() return mq.TLO.Me.Fellowship.Campfire() == nil end)
+            end
+        end
+
+        Logger.log_debug("\atFellowship Campfire Type Selected: %s (%d)", camptype and "Override" or self:GetCampfireTypeName(), camptype or self:GetCampfireTypeID())
+        mq.TLO.Window("FellowshipWnd").Child("FP_RefreshList").LeftMouseUp()
+        mq.delay("1s")
+        mq.TLO.Window("FellowshipWnd").Child("FP_CampsiteKitList").Select(camptype or self:GetCampfireTypeID())
+        mq.delay("1s")
+        mq.TLO.Window("FellowshipWnd").Child("FP_CreateCampsite").LeftMouseUp()
+        mq.delay("5s", function() return mq.TLO.Me.Fellowship.Campfire() ~= nil end)
+        mq.TLO.Window("FellowshipWnd").DoClose()
+        mq.delay("2s", function() return (mq.TLO.Me.Fellowship.CampfireZone.ID() or 0) == mq.TLO.Zone.ID() end)
+
+        Logger.log_info("\agCampfire Dropped")
+    else
+        Logger.log_info("\ayCan't create campfire. Only %d nearby. Setting MaintainCampfire to 0.", fellowCount)
+        Config:SetSetting('MaintainCampfire', 1) -- off
+    end
+end
+
+function Module:ValidChaseTarget()
+    local chaseTarget = Config:GetSetting('ChaseTarget')
+    return ((chaseTarget or ""):len() > 0) and chaseTarget ~= mq.TLO.Me.CleanName()
+end
+
+function Module:GetChaseTarget()
+    return Config:GetSetting('ChaseTarget'):len() > 0 and Config:GetSetting('ChaseTarget') or "None"
+end
+
+function Module:ShouldRender()
+    return true
+end
+
+function Module:Render()
+    Base.Render(self)
+
+    if self.ModuleLoaded and Globals.SubmodulesLoaded then
+        local chaseSpawn = mq.TLO.Spawn("pc =" .. self:GetChaseTarget())
+        local chaseDist = Config:GetSetting('ChaseDistance')
+        local chaseStopDist = Config:GetSetting('ChaseStopDistance')
+        local requireLOS = Config:GetSetting('RequireLoS')
+        local chaseSpawnDist = chaseSpawn() and (chaseSpawn.Distance() or 999) or 999
+
+        ImGui.BeginTable("##MoveInfoTable", 2, bit32.bor(ImGuiTableFlags.BordersInner, ImGuiTableFlags.SizingFixedFit))
+        ImGui.TableNextColumn()
+        Ui.RenderText("Chase Distance")
+        ImGui.TableNextColumn()
+        if not chaseSpawn() or chaseSpawn.ID() == 0 then
+            Ui.RenderColoredText(Globals.Constants.BasicColors.Grey, "N/A")
+        else
+            Ui.RenderColoredText(chaseDist > chaseSpawnDist and Globals.Constants.BasicColors.Green or Globals.Constants.BasicColors.Red, "%d", chaseDist)
+        end
+        ImGui.TableNextColumn()
+        Ui.RenderText("Chase Stop Distance")
+        ImGui.TableNextColumn()
+        if not chaseSpawn() or chaseSpawn.ID() == 0 then
+            Ui.RenderColoredText(Globals.Constants.BasicColors.Grey, "N/A")
+        else
+            Ui.RenderColoredText(chaseStopDist < chaseSpawnDist and Globals.Constants.BasicColors.Green or Globals.Constants.BasicColors.Red, "%d", chaseStopDist)
+        end
+        ImGui.TableNextColumn()
+        Ui.RenderText("Chase LOS Required")
+        ImGui.TableNextColumn()
+        Ui.RenderColoredText(requireLOS and Globals.Constants.BasicColors.Green or Globals.Constants.BasicColors.Red, requireLOS and "Yes" or "No")
+        ImGui.EndTable()
+
+        ImGui.Separator()
+
+        local manageMovement = Config:GetSetting('ManagePeerMovement')
+        local newManage = ImGui.Checkbox("Manage movement for my", manageMovement)
+        if newManage ~= manageMovement then
+            Config:SetSetting('ManagePeerMovement', newManage)
+            manageMovement = newManage
+        end
+        Ui.Tooltip(Config:GetSettingDefaults('ManagePeerMovement').Tooltip)
+        ImGui.SameLine()
+        ImGui.BeginDisabled(not manageMovement)
+        local scopeOptions = self.DefaultConfig['PeerMovementScope'].ComboOptions
+        local scopeComboWidth = 0
+        for _, option in ipairs(scopeOptions) do
+            local optionWidth = ImGui.CalcTextSize(option)
+            scopeComboWidth = math.max(scopeComboWidth, optionWidth)
+        end
+        ImGui.SetNextItemWidth(scopeComboWidth + ImGui.GetStyle().FramePadding.x * 2 + ImGui.GetFrameHeight())
+        local newScope, scopePressed = ImGui.Combo("##PeerMovementScope", Config:GetSetting('PeerMovementScope'), scopeOptions, #scopeOptions)
+        if scopePressed then
+            Config:SetSetting('PeerMovementScope', newScope)
+        end
+        Ui.Tooltip(Config:GetSettingDefaults('PeerMovementScope').Tooltip)
+        ImGui.EndDisabled()
+        ImGui.SameLine()
+        ImGui.AlignTextToFramePadding()
+        Ui.RenderText("Peers.")
+
+        local scopeWord = Config:GetSetting('PeerMovementScope') == 2 and "Zone" or ((mq.TLO.Raid.Members() or 0) > 0 and "Raid" or "Group")
+        local chaseOn = Config:GetSetting('ChaseOn')
+        local chasePeers = manageMovement and self:MovePeers(false) or {}
+        local myName = mq.TLO.Me.CleanName()
+        local chasingCount = 0
+        local inChaseCount = 0
+        for _, peer in ipairs(chasePeers) do
+            local chase = peer.data and peer.data.Chase
+            if chase and chase ~= "Chase Off" and chase ~= "Standalone" then
+                inChaseCount = inChaseCount + 1
+                if chase == myName then
+                    chasingCount = chasingCount + 1
+                end
+            end
+        end
+
+        ImGui.Separator()
+
+        local chaseButtonWidth = ImGui.CalcTextSize("Turn Group Chase Off") + ImGui.GetStyle().FramePadding.x * 2
+        local buttonDisabled = mq.TLO.Target() == nil or mq.TLO.Target.Type() ~= "PC"
+        local chaseTargetName = mq.TLO.Target.DisplayName() or "Error"
+        local chaseTargetWidth = ImGui.CalcTextSize(buttonDisabled and "Select a PC to Chase" or string.format("Set %s as the Group Chase Target", chaseTargetName)) +
+            ImGui.GetStyle().FramePadding.x * 2
+
+        local chaseOnLabel = manageMovement and string.format("Turn %s Chase On", scopeWord) or "Turn Chase On"
+        local chaseOffLabel = manageMovement and string.format("Turn %s Chase Off", scopeWord) or "Turn Chase Off"
+        if ImGui.Button(chaseOnLabel, chaseButtonWidth, 25) then
+            if manageMovement then
+                Comms.SendPeersDoCmd(chasePeers, "/rgl chaseon")
+            else
+                self:ChaseOn()
+            end
+        end
+        Ui.Tooltip(manageMovement and "Tell your peers to start chasing." or
+            "If Chase is enabled without a valid chase target, your Main Assist will be used.\nFind more information about Chasing by checking the Command List or FAQs in the Options Window.")
+        ImGui.SameLine()
+        if ImGui.Button(chaseOffLabel, chaseButtonWidth, 25) then
+            if manageMovement then
+                Comms.SendPeersDoCmd(chasePeers, "/rgl chaseoff")
+            else
+                self:ChaseOff()
+            end
+        end
+        Ui.Tooltip(manageMovement and "Tell your peers to stop chasing." or "Stop chasing your current chase target.")
+
+        ImGui.BeginDisabled(buttonDisabled)
+        local setTargetLabel
+        if buttonDisabled then
+            setTargetLabel = "Select a PC to Chase"
+        elseif manageMovement then
+            setTargetLabel = string.format("Set %s as the %s Chase Target", chaseTargetName, scopeWord)
+        else
+            setTargetLabel = string.format("Set %s as Chase Target", chaseTargetName)
+        end
+        if ImGui.Button(setTargetLabel, chaseTargetWidth, 25) then
+            if manageMovement then
+                Comms.SendPeersDoCmd(chasePeers, "/rgl chaseon " .. chaseTargetName)
+            else
+                Config:SetSetting("ChaseTarget", chaseTargetName)
+            end
+        end
+        ImGui.EndDisabled()
+
+
+
+        local haveChaseTarget = self:ValidChaseTarget() and chaseSpawn() and chaseSpawn.ID() > 0
+        local showChaseDetails = chaseOn and haveChaseTarget
+
+        if ImGui.BeginTable("ChaseInfoTable", 2, bit32.bor(ImGuiTableFlags.Borders)) then
+            ImGui.TableNextColumn()
+            Ui.RenderText("Chase Status")
+            ImGui.TableNextColumn()
+            if not chaseOn then
+                Ui.RenderColoredText(Globals.Constants.BasicColors.Red, "Off")
+            elseif self.TempSettings.ChaseSuppressed then
+                Ui.RenderColoredText(Globals.Constants.BasicColors.Yellow, "Suppressed (Combat)")
+            else
+                Ui.RenderColoredText(Globals.Constants.BasicColors.Green, "Chasing")
+            end
+
+            if manageMovement then
+                ImGui.TableNextColumn()
+                Ui.RenderText("Peers Chasing")
+                ImGui.TableNextColumn()
+                if #chasePeers == 0 then
+                    Ui.RenderColoredText(Globals.Constants.BasicColors.Grey, "None in scope")
+                else
+                    local countColor = chasingCount == #chasePeers and Globals.Constants.BasicColors.Green
+                        or Globals.Constants.BasicColors.Yellow
+                    Ui.RenderColoredText(countColor, "%d / %d", inChaseCount, #chasePeers)
+                    local lines = { string.format("%d chasing you", chasingCount), }
+                    for _, peer in ipairs(chasePeers) do
+                        local chase = peer.data and peer.data.Chase
+                        local target = (not chase or chase == "Chase Off" or chase == "Standalone") and "Off"
+                            or (chase == myName and "you" or chase)
+                        table.insert(lines, string.format("  %s: %s", peer.name, target))
+                    end
+                    Ui.Tooltip(table.concat(lines, "\n"))
+                end
+            end
+
+            if chaseOn then
+                ImGui.TableNextColumn()
+                Ui.RenderText("Chase Target")
+                ImGui.TableNextColumn()
+                Ui.RenderText(self:GetChaseTarget())
+            end
+
+            if showChaseDetails then
+                ImGui.TableNextColumn()
+                Ui.RenderText("Distance")
+                ImGui.TableNextColumn()
+                Ui.RenderText("%d", chaseSpawn.Distance() or 0)
+                ImGui.TableNextColumn()
+                Ui.RenderText("ID")
+                ImGui.TableNextColumn()
+                Ui.RenderText("%d", chaseSpawn.ID() or 0)
+                ImGui.TableNextColumn()
+                Ui.RenderText("Line of Sight")
+                ImGui.TableNextColumn()
+                if chaseSpawn.LineOfSight() then
+                    ImGui.PushStyleColor(ImGuiCol.Text, Globals.Constants.Colors.ConditionPassColor)
+                else
+                    ImGui.PushStyleColor(ImGuiCol.Text, Globals.Constants.Colors.ConditionFailColor)
+                end
+                Ui.RenderText(chaseSpawn.LineOfSight() and Icons.FA_EYE or Icons.FA_EYE_SLASH)
+                ImGui.PopStyleColor(1)
+                ImGui.TableNextColumn()
+                Ui.RenderText("Loc")
+                ImGui.TableNextColumn()
+                Ui.NavEnabledLoc(chaseSpawn.LocYXZ() or "0,0,0")
+            end
+            ImGui.EndTable()
+        end
+
+        ImGui.Separator()
+
+        local returnToCamp = Config:GetSetting('ReturnToCamp')
+        local campLabel
+        if manageMovement then
+            campLabel = returnToCamp and string.format("Break %s Camp", scopeWord) or string.format("Set %s Camp Here", scopeWord)
+        else
+            campLabel = returnToCamp and "Break Camp" or "Set New Camp Here"
+        end
+        local campButtonWidth = ImGui.CalcTextSize("Set Group Camp Here") + ImGui.GetStyle().FramePadding.x * 2
+        ImGui.PushStyleVar(ImGuiStyleVar.FramePadding, ImGui.GetStyle().FramePadding.x, 0)
+        if ImGui.Button(campLabel, campButtonWidth, 25) then
+            if manageMovement then
+                Comms.SendPeersDoCmd(self:MovePeers(true), returnToCamp and "/rgl campoff" or "/rgl campon")
+            elseif returnToCamp then
+                self:CampOff()
+            else
+                self:CampOn()
+            end
+        end
+        ImGui.PopStyleVar(1)
+        Ui.Tooltip("Find more information about Camping by checking the Command List or FAQs in the Options Window.")
+
+        local me = mq.TLO.Me
+        local distanceToCamp = Math.GetDistance(me.Y(), me.X(), self.TempSettings.AutoCampY or 0, self.TempSettings.AutoCampX or 0)
+        if ImGui.BeginTable("CampInfoTable", 2, bit32.bor(ImGuiTableFlags.Borders)) then
+            ImGui.TableNextColumn()
+            Ui.RenderText("Camp Set")
+
+            ImGui.TableNextColumn()
+            if Config:GetSetting('ReturnToCamp') then
+                ImGui.PushStyleColor(ImGuiCol.Text, Globals.Constants.Colors.ConditionPassColor)
+                Ui.RenderText(Icons.FA_FREE_CODE_CAMP)
+            else
+                ImGui.PushStyleColor(ImGuiCol.Text, Globals.Constants.Colors.ConditionFailColor)
+                Ui.RenderText(Icons.MD_NOT_INTERESTED)
+            end
+            ImGui.PopStyleColor(1)
+
+            ImGui.TableNextColumn()
+            Ui.RenderText("Camp Location")
+            ImGui.TableNextColumn()
+            Ui.NavEnabledLoc(string.format("%d,%d,%d", self.TempSettings.AutoCampY or 0, self.TempSettings.AutoCampX or 0, self.TempSettings.AutoCampZ or 0))
+            ImGui.TableNextColumn()
+            Ui.RenderText("Distance to Camp")
+            ImGui.TableNextColumn()
+            Ui.RenderText("%d", self.TempSettings.CampZoneId == mq.TLO.Zone.ID() and distanceToCamp or 0)
+            ImGui.TableNextColumn()
+            Ui.RenderText("Camp Radius")
+            ImGui.TableNextColumn()
+            Ui.RenderText("%d", self.TempSettings.CampZoneId == mq.TLO.Zone.ID() and Config:GetSetting("AutoCampRadius") or 0)
+            ImGui.EndTable()
+        end
+    end
+end
+
+function Module:OnDeath()
+    if not Config:GetSetting('BreakOnDeath') then return end
+    if Config:GetSetting('ChaseTarget') then
+        Logger.log_info("\awNOTICE:\ax You're dead. I'm not chasing %s anymore.", Config:GetSetting('ChaseTarget'))
+    end
+    Config:SetSetting('ChaseOn', false)
+    Config:SetSetting('ChaseTarget', "")
+end
+
+function Module:ShouldFollow()
+    if mq.TLO.MoveTo.Moving() or (mq.TLO.Me.Casting() and not Core.MyClassIs("brd")) then return false end
+
+    if not Config:GetSetting('ChaseInCombat') and not Config:GetSetting('PriorityFollow') and Config:GetSetting('DoAutoEngage')
+        and not Globals.PauseMain and not Config:GetSetting('ManualMode')
+        and Targeting.XTHaterInRange(Config:GetSetting('AssistRange')) then
+        -- Hold unless the MA's fight has moved out of our reach (they were summoned, or we were left behind).
+        local maTargetId = Globals.MATargetID
+        local separated = maTargetId > 0 and Targeting.IsSpawnXTHater(maTargetId, true)
+            and (mq.TLO.Spawn(maTargetId).Distance3D() or 9999) > Config:GetSetting('AssistRange')
+        if not separated then
+            self.TempSettings.ChaseSuppressed = true
+            Logger.log_super_verbose("ShouldFollow(): chase paused, XTarget hater within Assist Range.")
+            return false
+        end
+    end
+
+    self.TempSettings.ChaseSuppressed = false
+    return true
+end
+
+function Module:OnZone()
+    if not self.TempSettings.DeathCampHold then
+        self:CampOff()
+    end
+    if mq.TLO.Nav.Active() then
+        Movement:DoNav(true, "stop")
+    end
+end
+
+function Module:DoAutoCampCheck(bCalledFromInsideEvent)
+    Combat.AutoCampCheck(self.TempSettings, bCalledFromInsideEvent)
+end
+
+--- True when a tank reposition is needed (rear hater detected, setting on, reposition can fire, and we haven't repositioned in the last 3 seconds).
+---@return boolean
+function Module:TankRepositionNeeded()
+    if not Config:GetSetting('KeepMobsInFront') then return false end
+    if (Globals.GetTimeSeconds() - Movement.LastReposition) < 3 then return false end
+    if not Movement:CanReposition() then return false end
+    return Movement:DetectMobBehind() ~= nil
+end
+
+function Module:DoCombatCampCheck()
+    Combat.CombatCampCheck(self.TempSettings)
+end
+
+--- Determines if the character should mount for travel.
+---@return boolean True if the character should mount, false otherwise.
+function Module:ShouldMount()
+    return Config:GetSetting('DoMount') == 2 and not Config:GetSetting('DoMelee') and
+        (Config:GetSetting('MountItem') or ""):len() > 0 and mq.TLO.Me.CanMount() and (mq.TLO.Me.Mount.ID() or 0) == 0 and
+        Casting.CheckOkayToBuff()
+end
+
+function Module:DoChase()
+    local chaseTarg = Config:GetSetting('ChaseTarget')
+    local chaseSpawn = mq.TLO.Spawn("pc =" .. chaseTarg)
+    local chaseId = chaseSpawn.ID()
+
+    if not chaseSpawn or chaseSpawn.Dead() or chaseId == 0 then
+        Logger.log_verbose("\awNOTICE:\ax Chase Target \am%s\ax is dead or not found in zone.", chaseTarg)
+        return
+    end
+
+    if mq.TLO.Me.Dead() then return end
+
+    -- determine if chase is needed
+    local chaseDist = Config:GetSetting('ChaseDistance')
+    local stopDist = Config:GetSetting('ChaseStopDistance')
+    local chaseSpawnDist = chaseSpawn.Distance() or 0
+    local navPathString = string.format("id %d", chaseId)
+    local useLocNav = false
+
+    if Config:GetSetting('UseActorNav') then
+        local heartbeat = Comms.GetPeerHeartbeatByName(chaseTarg)
+        local data = heartbeat and heartbeat.Data
+        if data and data.Zone == mq.TLO.Zone.Name() and data.X and data.Y and data.Z then
+            local peerLoc = string.format("%d, %d, %d", data.Y, data.X, data.Z)
+            chaseSpawnDist = math.floor(mq.TLO.Math.Distance(peerLoc)()) -- math.distance returns 0 on invalid string
+            -- Algar note: Emu server code seems to give constant updates up to 300, and periodic updates up to 600. Over 600, stops updating. Tested on EQMight 11/2025
+            if chaseSpawnDist > 300 then
+                useLocNav = true
+                navPathString = string.format("loc %d %d %d", data.Y, data.X, data.Z)
+            end
+        else
+            Logger.log_verbose("\awNOTICE:\ax Chase Target \am%s\ax has no valid actor data, falling back to spawn checks.", chaseTarg)
+        end
+    end
+
+    -- Use MQ2Nav to navigate if able:
+    -- -- If we are using actor nav, and the chase target is far enough away, nav to the loc, as spawn checks aren't reliable
+    -- -- Otherwise, if the mesh is loaded, we will nav to the spawn to take advantage of MQ2Nav spawn tracking, and fallback to a moveto if no path exists
+    -- -- Finally, if there is no mesh loaded, we will fall back on afollow if the target is close enough
+    if chaseSpawnDist > chaseDist then
+        --recheck valid spawn because they could have zoned
+        if not chaseSpawn() or chaseSpawn.ID() == 0 then
+            Logger.log_verbose("\awNOTICE:\ax Chase Target \am%s\ax is dead or not found in zone.", chaseTarg)
+            return
+        end
+
+        local Nav = mq.TLO.Navigation
+        if Nav.MeshLoaded() then
+            if not Nav.Active() or useLocNav then -- if naving to a location, update that to the most recent location in case the target is moving
+                local requireLoS = Config:GetSetting('RequireLoS') and "on" or "off"
+
+                if Nav.PathExists(navPathString)() then
+                    Logger.log_verbose("\awNOTICE:\ax Chase Target %s is out of range - naving", chaseTarg)
+                    Movement:DoNav(true, "%s log=critical dist=%d lineofsight=%s", navPathString, stopDist, requireLoS)
+                    mq.delay("1s", function() return mq.TLO.Navigation.Active() end)
+                else
+                    -- Assuming no line of site problems.
+                    Logger.log_verbose("\awNOTICE:\ax Chase Target %s Has no nav path, trying /moveto", chaseTarg)
+                    Movement:MoveToSpawnId(chaseId, Config:GetSetting('ChaseDistance'))
+                end
+            end
+        elseif chaseSpawnDist < 400 then -- Algarnote I left this alone, legacy code, not sure if this value is signifigant or arbitrary
+            Logger.log_warning("\awWARNING:\ax Chase Target %s but no nav mesh - using afollow instead", chaseTarg)
+            Movement:DoFollowCmd("spawn %d", chaseId)
+            Movement:DoFollowCmd("%d", chaseDist)
+
+            mq.delay("2s")
+
+            if (chaseSpawn.Distance() or 0) < stopDist then
+                Movement:DoFollowCmd("off")
+            end
+        end
+    end
+end
+
+function Module:GiveTime()
+    if mq.TLO.Me.Hovering() and Config:GetSetting('ChaseOn') then
+        if Config:GetSetting('BreakOnDeath') then
+            Logger.log_warn("\awNOTICE:\ax You're dead. I'm not chasing \am%s\ax anymore.",
+                Config:GetSetting('ChaseTarget'))
+            Config:SetSetting('ChaseOn', false)
+        end
+        return
+    end
+
+    if Globals.PauseMain and not Config:GetSetting('RunMovePaused') then
+        Module.TempSettings.NavWasActive = false -- stop monitoring; resume starts a fresh stuck window
+        return
+    end
+
+    self:CheckStuck()
+
+    if Config:GetSetting("ReturnToCamp") and not self.TempSettings.DeathCampHold and not self:InCampZone() then
+        Config:SetSetting("ReturnToCamp", false)
+    end
+
+    local combat_state = Combat.GetCachedCombatState()
+
+    if combat_state == "Downtime" then
+        if self:ShouldMount() then
+            Logger.log_debug("\ayMounting...")
+            Casting.UseItem(Config:GetSetting('MountItem'), mq.TLO.Me.ID())
+        end
+    end
+
+    if Combat.ShouldDoCamp() then
+        self:DoAutoCampCheck()
+    end
+
+    if Config:GetSetting('ReturnToCamp') and Config:GetSetting('CampLeashCombat') and not Combat.ShouldDoCamp() then
+        self:DoCombatCampCheck()
+    end
+
+    if Config:GetSetting('MaintainCampfire') > 1 and Casting.OkayToBuff() then
+        if not mq.TLO.Me.Fellowship.CampfireZone() and self:InCampZone() then
+            --Logger.log_debug("Doing campfire maintainance")
+            self:Campfire()
+        end
+    else
+        --Logger.log_debug("Skipping Campfire Checks")
+    end
+
+    if not self:ShouldFollow() then
+        Logger.log_super_verbose("ShouldFollow() check failed.")
+        return
+    end
+
+    if Config:GetSetting('ChaseOn') and not self:ValidChaseTarget() then
+        Config:SetSetting('ChaseOn', false)
+        Logger.log_warn("\awNOTICE:\ax \ayChase Target is invalid. Turning Chase Off!")
+    end
+
+    if Config:GetSetting('ChaseOn') and Config:GetSetting('ChaseTarget') then
+        self:DoChase()
+    end
+end
+
+function Module:IAmStuck()
+    Movement:StoreLastMove()
+    local Nav = mq.TLO.Navigation
+    local stuck = Nav.Active() and not Nav.Paused() and
+        Movement:GetTimeSinceLastPositionChange() >= Config:GetSetting('AttemptToFixStuckTimer')
+
+    local lastNav = Movement:GetLastNavCmd()
+
+    if stuck then
+        Logger.log_debug(
+            "\ayIAmStuck\aw(): \atStuck\aw: %s, \atNav.Active()\aw: %s, \atNav.Paused()\aw: %s,\amNav.Velocity()\aw: \ao%d\aw, \amTimeSinceLastPositionChange()\aw: \ao%d\aw, \amAttemptToFixStuckTimer()\aw: \ao%d\aw, \amLastNavCmdTime\aw: \ao%s, \amLastNavCmd\aw: \at%s",
+            Strings.BoolToColorString(stuck), Strings.BoolToColorString(Nav.Active()), Strings.BoolToColorString(Nav.Paused()), Nav.Velocity(),
+            Movement:GetTimeSinceLastPositionChange(),
+            Config:GetSetting('AttemptToFixStuckTimer'),
+            Movement:GetTimeSinceLastNav(), lastNav)
+    else
+        Logger.log_verbose(
+            "\ayIAmStuck\aw(): \atStuck\aw: %s, \atNav.Active()\aw: %s, \atNav.Paused()\aw: %s, \amNav.Velocity()\aw: \ao%d\aw, \amTimeSinceLastPositionChange()\aw: \ao%d\aw, \amAttemptToFixStuckTimer()\aw: \ao%d\aw, \amLastNavCmdTime\aw: \ao%s, \amLastNavCmd\aw: \at%s",
+            Strings.BoolToColorString(stuck), Strings.BoolToColorString(Nav.Active()), Strings.BoolToColorString(Nav.Paused()), Nav.Velocity(),
+            Movement:GetTimeSinceLastPositionChange(),
+            Config:GetSetting('AttemptToFixStuckTimer'),
+            Movement:GetTimeSinceLastNav(), lastNav)
+    end
+
+    return stuck
+end
+
+function Module:CheckStuck()
+    local Nav = mq.TLO.Navigation
+
+    -- nav not running: reset episode tracking and bail.
+    if not Nav.Active() then
+        Module.TempSettings.NavWasActive = false
+        return
+    end
+
+    -- new nav episode (inactive->active, or first sight of an already-running nav): drop any pre-nav idle time and give it a fresh window before judging.
+    -- Keeps us from false-firing on someone else's nav.
+    if not Module.TempSettings.NavWasActive then
+        Module.TempSettings.NavWasActive = true
+        Movement:ResetPositionChangeTimer()
+        return
+    end
+
+    if not self:IAmStuck() then return end
+
+    if not Config:GetSetting('AttemptToFixStuck') then return end
+
+    -- can't move a CC'd character; don't thrash the nav trying.
+    if mq.TLO.Me.Stunned() or mq.TLO.Me.Mezzed() or mq.TLO.Me.Rooted() then
+        Movement:ResetPositionChangeTimer()
+        return
+    end
+
+    if mq.TLO.MoveTo.Moving() then
+        Logger.log_warning("\awWARNING:\ax Navigation appears to be trying to MoveTo and Nav at the same time. Stopping MoveTo to attempt to fix stuck.")
+        Movement:StopMoveTo()
+    end
+
+    Logger.log_warning("\awWARNING:\ax Navigation appears to be stuck")
+    self:AttemptUnstick()
+    Movement:ResetPositionChangeTimer() -- cooldown: one full timer before re-attempting
+end
+
+--- Waits up to ms for nav to start moving again, polling stuck state.
+---@param ms number Max milliseconds to wait.
+---@return boolean True if no longer stuck.
+function Module:WaitForUnstuck(ms)
+    mq.delay(ms, function() return not self:IAmStuck() end)
+    return not self:IAmStuck()
+end
+
+--- Tries each unstick strategy in order, stopping at the first that gets us moving again.
+---@return boolean True if any strategy succeeded.
+function Module:AttemptUnstick()
+    local unstuck = self:UnstickViaPauseToggle() or self:UnstickViaStepBack() or self:UnstickViaAutoSize()
+    if unstuck then
+        Logger.log_warning("\agUnstuck successful!\ax Resuming Navigation.")
+    else
+        Logger.log_warning("\arStill stuck.\ax Tried everything I've got - I'll keep trying.")
+    end
+    return unstuck
+end
+
+--- Toggles nav pause off and back on to nudge MQ2Nav pathing state
+---@return boolean True if no longer stuck after resuming.
+function Module:UnstickViaPauseToggle()
+    Movement:SetNavPaused(true)
+    mq.delay(300)
+    Movement:SetNavPaused(false)
+    return self:WaitForUnstuck(2000)
+end
+
+--- Steps backward briefly to peel off geometry, then resumes nav.
+---@return boolean True if no longer stuck after resuming.
+function Module:UnstickViaStepBack()
+    Movement:SetNavPaused(true)
+    Core.DoCmd("/keypress back hold")
+    mq.delay(500)
+    Core.DoCmd("/keypress back")
+    Movement:SetNavPaused(false)
+    return self:WaitForUnstuck(2000)
+end
+
+--- Cycles MQ2AutoSize (if loaded) self-size to change the collision hitbox and pop off geometry.
+---@return boolean True if no longer stuck, false if plugin absent or all sizes fail.
+function Module:UnstickViaAutoSize()
+    ---@diagnostic disable-next-line: undefined-field
+    if not (mq.TLO.Plugin("MQ2AutoSize").IsLoaded() and mq.TLO.AutoSize ~= nil) then
+        Logger.log_warning("\awWARNING:\ax MQ2AutoSize not loaded, cannot unstick via resize.")
+        return false
+    end
+
+    Logger.log_warning("\awWARNING:\ax Attempting to unstick via MQ2AutoSize resize cycle")
+    ---@diagnostic disable-next-line: undefined-field
+    local startingSize = mq.TLO.AutoSize.SizeSelf()
+    ---@diagnostic disable-next-line: undefined-field
+    local startingToggleEnabled = mq.TLO.AutoSize.Enabled()
+    ---@diagnostic disable-next-line: undefined-field
+    local startingToggleSelf = mq.TLO.AutoSize.ResizeSelf()
+
+    -- the resize needs nav running so the freed hitbox lets it move off again.
+    Movement:SetNavPaused(false)
+
+    if not startingToggleEnabled then
+        Logger.log_debug("\awWARNING:\ax Enabling AutoSize to unstick")
+        Core.DoCmd("/squelch /autosize on")
+    end
+    if not startingToggleSelf then
+        Logger.log_debug("\awWARNING:\ax Enabling AutoSize Self to unstick")
+        Core.DoCmd("/squelch /autosize self on")
+    end
+
+    local unstuck = false
+    for _, size in ipairs({ startingSize * 2, 1, startingSize * 1.5, 1, startingSize * 3, 1, }) do
+        Logger.log_debug("\awWARNING:\ax Setting size to %d to unstick", size)
+        Core.DoCmd("/squelch /autosize sizeself %d", size)
+        if self:WaitForUnstuck(2000) then
+            unstuck = true
+            break
+        end
+    end
+
+    Core.DoCmd("/squelch /autosize sizeself %d", startingSize) -- restore starting size
+    if not startingToggleSelf then
+        Core.DoCmd("/squelch /autosize self off")
+    end
+    if not startingToggleEnabled then
+        Core.DoCmd("/squelch /autosize off")
+    end
+
+    return unstuck
+end
+
+return Module

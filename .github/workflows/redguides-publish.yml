@@ -1,0 +1,58 @@
+name: Publish to RedGuides
+
+on:
+  workflow_run:
+    workflows: ["Publish to Github and Create Release"]
+    types:
+      - completed
+
+jobs:
+  publish:
+    if: github.repository == 'DerpleDude/rgmercs' && github.event.workflow_run.conclusion == 'success'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          # Full history + tags so `git describe HEAD^` resolves the previous
+          # release tag (depth-1 has no HEAD^ and no tags -> PREV was always
+          # empty -> notes were only ever the tip commit).
+          #
+          # Do NOT pin ref to workflow_run.head_sha: that is the commit that
+          # TRIGGERED package-main (pre-bump), not the bump commit it pushed.
+          # The default (latest default-branch HEAD) is the bump commit, which
+          # is what we want to read, archive, and describe against.
+          fetch-depth: 0
+
+      - name: Read version
+        id: version
+        run: |
+          VERSION=$(sed -n 's/.*version *= *\([0-9]\+\).*/\1/p' extras/version.lua)
+          [ -z "$VERSION" ] && exit 1
+          echo "version=$VERSION" >> $GITHUB_OUTPUT
+
+      - name: Build zip file
+        run: git archive --format=zip --prefix="${{ github.event.repository.name }}/" -o "${{ github.event.repository.name }}_${{ steps.version.outputs.version }}.zip" HEAD
+
+      - name: Generate RedGuides release notes
+        shell: bash
+        run: |
+          VERSION="${{ steps.version.outputs.version }}"
+          PREV=$(git describe --tags --abbrev=0 HEAD^ 2>/dev/null || echo "")
+          # HEAD is the CI bump commit; exclude it (and any future bump commits
+          # in-range) so the notes are the real changelog, not "bump version".
+          git log --no-merges --invert-grep --grep='^chore: bump version' \
+            --pretty=format:"- [%s](${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/commit/%H)%n%n%b%n~%an" ${PREV:+$PREV..}HEAD \
+          | awk '/^~/{print ""; print; next} /^$/{if(!blank){print}; blank=1; next} {blank=0; print}' > rg_release_notes.md
+          cat rg_release_notes.md
+
+      - name: Publish to RedGuides
+        uses: RedGuides/redguides-publish@v1
+        env:
+          REDGUIDES_API_KEY: ${{ secrets.REDGUIDES_API_KEY }}
+        with:
+          resource_id: "3040"
+          version: "${{ steps.version.outputs.version }}"
+          file: "${{ github.event.repository.name }}_${{ steps.version.outputs.version }}.zip"
+          message: "rg_release_notes.md"
+          domain: "https://raw.githubusercontent.com/${{ github.repository }}/${{ github.event.repository.default_branch }}/"
