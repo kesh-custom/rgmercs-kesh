@@ -15,7 +15,7 @@ rgmercs-kesh カスタム内容メモ（現行）
 再適用した:
   - ScriptName / ScriptDir（フォルダ名自動検出）
   - BeforeResolveActions（BRD Psalm / SHD LifeTap 等）
-  - Stick 自動距離 MaxRangeTo x 0.7（Nav と共通）
+  - Stick 自動距離 固定 14 / 巨大MOB 24（Nav と共通）
   - Charm クリック Abilities「Charm」フェーズ結合
   - HealPriorityPoint + GetHealScanThreshold（MaxHealPoint 廃止）
   - EQ Might クラス差分（enc/brd/wiz/rng/nec/clr/shd）
@@ -93,7 +93,9 @@ Rotation / Charm:
   - Charm Abilities リストに Charm フェーズ clicky を結合
 
 Stick:
-  - 空欄時: MaxRangeTo x 0.7（Melee Nav も同じ値。Height 14/34 はやめた）
+  - 空欄時: 固定 14、MaxRangeTo >= 25 の巨大MOB は 24（Melee Nav も同じ値）
+        MaxRangeTo x 0.7 は Trakanon 等（MaxRangeTo ~71）で実効レンジと乖離し
+        TooFar が出続けるため廃止
   - 明示値あり: Nav / Stick ともその値
   - RNG Ranged Stick: Bow Range > 0 ならそれ、なければ Stick Distance / 自動
   - TooFar / CantSee（Melee）も GetEngageDistance に統一（大型の距離7特例を削除）

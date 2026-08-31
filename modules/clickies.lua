@@ -2647,13 +2647,18 @@ function Module:GiveTime()
                                 for _, peerId in ipairs(Casting.GetBuffableIDs()) do
                                     local candidate = mq.TLO.Spawn(peerId)
                                     if candidate() and Casting.LevelCheckPass(itemSpell, candidate)
-                                        and Casting.ResolveBuffCheck(spellId, candidate, nil, clicky.skipTriggerCheck) then
+                                        and Casting.ResolveBuffCheck(spellId, candidate, nil, clicky.skipTriggerCheck)
+                                        and not Casting.IsWeakerHasteOnTarget(spellId, candidate) then
                                         target = candidate
                                         buffCheckPassed = true
                                         break
                                     end
                                 end
                                 if not target then buffCheckPassed = false end
+                            end
+
+                            if buffCheckPassed and target and Casting.IsWeakerHasteOnTarget(itemSpell.ID(), target) then
+                                buffCheckPassed = false
                             end
 
                             if not clicky.no_target_change then
@@ -2753,6 +2758,7 @@ function Module:GetClickiesForRotations(clickyCombatState, rotationName)
                     end
 
                     if not buffCheckPassed then return false end
+                    if Casting.IsWeakerHasteOnTarget(itemSpell.ID(), targetSpawn) then return false end
 
                     local condTarget = nil
                     local condPeer = nil

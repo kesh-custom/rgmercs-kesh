@@ -1143,9 +1143,9 @@ Config.DefaultConfig                                     = {
         Header = "Positioning",
         Category = "General Positioning",
         Index = 2,
-        Tooltip = "Stick / Melee Nav distance. Leave blank for MaxRangeTo x 0.7 (same value for Nav and Stick).",
+        Tooltip = "Stick / Melee Nav distance. Leave blank for 14, or 24 on huge mobs (same value for Nav and Stick).",
         Default = "",
-        Hint = "Automatic: MaxRangeTo x 0.7",
+        Hint = "Automatic: 14 (24 on huge mobs)",
         ConfigType = "Advanced",
     },
     ['StickArgs']                  = {
@@ -1159,7 +1159,7 @@ Config.DefaultConfig                                     = {
         Hint = function() return require('utils.movement').GetDefaultStickArgs() .. " (default)" end,
         ConfigType = "Advanced",
         FAQ = "What are the default stick settings?",
-        Answer = "Blank Stick Distance uses MaxRangeTo x 0.7 for both Melee Nav and Stick, so Engage does not approach twice with different distances.\n" ..
+        Answer = "Blank Stick Distance uses 14 (24 on huge mobs) for both Melee Nav and Stick, so Engage does not approach twice with different distances.\n" ..
             "Ranged sticks (Use Ranged Stick) use these settings as well, but default their distance to Bow Range when set.",
     },
     ['BellyCastStick']             = {

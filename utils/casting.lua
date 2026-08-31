@@ -378,6 +378,108 @@ function Casting.ResolveBuffCheck(spellId, target, skipBlockCheck, skipTriggerCh
     end
 end
 
+--- Maps each SPA in a spell's effect slots to its highest positive base value.
+---@param spell MQSpell The spell whose effect slots to read.
+---@return table effects Map of SPA -> base value; empty when no slots are readable.
+function Casting.GetSpellEffectMap(spell)
+    local effects = {}
+    if not (spell and spell()) then return effects end
+
+    for i = 1, (spell.NumEffects() or 0) do
+        local spa = spell.Attrib(i)()
+        local base = tonumber(spell.Base(i)()) or 0
+        if spa and base > 0 and base > (effects[spa] or 0) then
+            effects[spa] = base
+        end
+    end
+
+    return effects
+end
+
+--- Collects the spell IDs active on a target without changing targets, so callers can compare
+--- effect strength cheaply. Songs are reported separately from buffs because they occupy their
+--- own window and follow their own stacking rules (bard haste adds on top of spell haste).
+---@param target MQSpawn? The target to read; defaults to the current target.
+---@param durationWindow integer? 1 for the song window, anything else for the buff window.
+---@return table? spellIds Array of active spell IDs, or nil when no source can report them.
+function Casting.GetActiveSpellIDs(target, durationWindow)
+    if not target then target = mq.TLO.Target end
+    if not (target and target()) then return nil end
+
+    local wantSongs = durationWindow == 1
+    local targetId = target.ID()
+    local ids = {}
+
+    if targetId == mq.TLO.Me.ID() then
+        for _, spellId in ipairs((wantSongs and Globals.CurrentSongs or Globals.CurrentBuffs) or {}) do
+            table.insert(ids, spellId)
+        end
+        return ids
+    end
+
+    local isPet = Targeting.TargetIsType("Pet", target)
+    local heartbeat = Comms.GetPeerHeartbeatByName((isPet and target.Master()) and target.Master.DisplayName() or target.DisplayName())
+    local heartbeatData = heartbeat and heartbeat.Data
+    local buffList = heartbeatData and heartbeatData[isPet and "PetBuffs" or "Buffs"]
+
+    if buffList then
+        -- Pets have no song window, so their buff list is the only source either way.
+        for _, spellId in ipairs((wantSongs and not isPet) and (heartbeatData.Songs or {}) or buffList) do
+            table.insert(ids, spellId)
+        end
+        return ids
+    end
+
+    -- Target buffs report both windows together; callers filter by window themselves.
+    if targetId == mq.TLO.Target.ID() and mq.TLO.Target.BuffsPopulated() then
+        for i = 1, (mq.TLO.Target.BuffCount() or 0) do
+            local buffId = mq.TLO.Target.Buff(i).ID()
+            if buffId and buffId > 0 then table.insert(ids, buffId) end
+        end
+        return ids
+    end
+
+    return nil
+end
+
+local SPA_MELEE_SPEED = 11
+
+--- Returns true when the target already has an equal or stronger haste than the candidate would
+--- apply. Stacking checks only answer whether two spells can coexist, so a weaker haste
+--- (Speed of Vallon's 64% under Vallon's Quickening's 72%) would otherwise be recast forever.
+--- Fails open when the target's buffs cannot be read.
+---@param spellId integer The candidate spell ID.
+---@param target MQSpawn? The target to check; defaults to the current target.
+---@return boolean True if an equal or stronger haste is already active on the target.
+function Casting.IsWeakerHasteOnTarget(spellId, target)
+    if not spellId then return false end
+
+    local candidate = mq.TLO.Spell(spellId)
+    local candidateHaste = Casting.GetSpellEffectMap(candidate)[SPA_MELEE_SPEED]
+    if not candidateHaste then return false end
+
+    local candidateWindow = candidate.DurationWindow()
+    local activeSpellIds = Casting.GetActiveSpellIDs(target, candidateWindow)
+    if not activeSpellIds then return false end
+
+    for _, activeId in ipairs(activeSpellIds) do
+        if activeId ~= spellId then
+            local activeSpell = mq.TLO.Spell(activeId)
+            local activeHaste = activeSpell.DurationWindow() == candidateWindow
+                and Casting.GetSpellEffectMap(activeSpell)[SPA_MELEE_SPEED] or nil
+            if activeHaste and activeHaste >= candidateHaste then
+                Logger.log_verbose("IsWeakerHasteOnTarget: %s(ID:%d, haste %d) is not better than %s(ID:%d, haste %d) on %s, skipping.",
+                    candidate.Name() or "Unknown", spellId, candidateHaste,
+                    activeSpell.Name() or "Unknown", activeId, activeHaste,
+                    target and target.DisplayName() or "None")
+                return true
+            end
+        end
+    end
+
+    return false
+end
+
 --- Presence-only check used for manual stacking overrides, using the best source available for the target.
 ---@param spellIds number|table The spell ID (or list of spell IDs) to check for on the target.
 ---@param target MQSpawn? The target to check; defaults to current target.

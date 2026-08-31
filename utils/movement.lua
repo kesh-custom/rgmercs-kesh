@@ -42,7 +42,7 @@ function Movement:DoStick(targetId)
     self:DoStickCmd("%s id %d %s", stickDist, targetId, stickArgs)
 end
 
--- Filled Stick Distance wins; blank uses MaxRangeTo * 0.7 (same value Melee Nav uses).
+-- Filled Stick Distance wins; blank uses the flat default (same value Melee Nav uses).
 function Movement.GetConfiguredStickDistance(spawnId)
     local stickDist = Config:GetSetting('StickDistance') or ""
     if stickDist ~= "" then return stickDist end
@@ -64,9 +64,19 @@ function Movement.GetRangedStickDistance(spawnId)
     return Movement.GetEngageDistance(spawnId or Globals.AutoTargetID)
 end
 
+-- MaxRangeTo is a client-side size estimate that runs far past the server's actual melee
+-- reach on huge mobs (Trakanon reports ~71), so use flat distances instead of scaling it.
+Movement.HugeMobMaxRangeTo   = 25
+Movement.HugeMobStickDist    = 24
+Movement.DefaultStickDist    = 14
+
+function Movement.IsHugeMob(spawnId)
+    local maxRange = tonumber(mq.TLO.Spawn(spawnId).MaxRangeTo()) or 0
+    return maxRange >= Movement.HugeMobMaxRangeTo
+end
+
 function Movement.GetDefaultStickDistance(spawnId)
-    local maxRange = tonumber(mq.TLO.Spawn(spawnId).MaxRangeTo()) or 15
-    return math.max(1, math.floor(maxRange * 0.7))
+    return Movement.IsHugeMob(spawnId) and Movement.HugeMobStickDist or Movement.DefaultStickDist
 end
 
 function Movement.GetDefaultStickArgs()

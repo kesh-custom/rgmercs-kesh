@@ -34,6 +34,35 @@ local function HateReductionBuffTargetMatches(target)
     return (target.Class.ShortName() or "") == opt
 end
 
+-- DebuffNamedOnly: Tash/Slow/Cripple (and AE variants in those rotations) on named only.
+-- Prefer XT named haters over AutoTarget when the MA is still on trash (Mez stays higher via RotationOrder).
+local function DebuffNamedOk()
+    if not Config:GetSetting('DebuffNamedOnly') then return true end
+    return Globals.AutoTargetIsNamed or Targeting.HasXTNamed()
+end
+
+local function DebuffTargetIDs()
+    if not Config:GetSetting('DebuffNamedOnly') then
+        return Targeting.CheckForAutoTargetID()
+    end
+    local range = Config:GetSetting('AssistRange') or 100
+    local ids, seen = {}, {}
+    local function addNamed(id)
+        if not id or id <= 0 or seen[id] then return end
+        local spawn = mq.TLO.Spawn(id)
+        if not (spawn and spawn()) or spawn.Dead() or (spawn.Type() or "") == "Corpse" then return end
+        if not Targeting.IsNamed(spawn) then return end
+        if not spawn.LineOfSight() or (spawn.Distance() or 999) > range then return end
+        seen[id] = true
+        table.insert(ids, id)
+    end
+    if (Globals.AutoTargetID or 0) > 0 then addNamed(Globals.AutoTargetID) end
+    for _, id in ipairs(Targeting.GetXTHaterIDs()) do
+        addNamed(id)
+    end
+    return ids
+end
+
 -- Provide a valid aura name to check as they are named differently then the spells
 -- -- Only use the first word(s) of the aura name, they are all unique (enough)
 local auraSpellToName = {
@@ -548,7 +577,8 @@ local _ClassConfig    = {
             state = 1,
             steps = 1,
             load_cond = function() return Config:GetSetting('DoTash') end,
-            targetId = function(self) return self.Helpers.DebuffTargetIDs() end,
+            -- Rotation targetId is invoked without a caller, so call the local helper directly.
+            targetId = function() return DebuffTargetIDs() end,
             cond = function(self, combat_state)
                 return combat_state == "Combat" and Casting.OkayToDebuff() and Core.CombatActionsCheck()
                     and self.Helpers.DebuffNamedOk()
@@ -559,7 +589,7 @@ local _ClassConfig    = {
             state = 1,
             steps = 1,
             load_cond = function() return Config:GetSetting('DoSlow') end,
-            targetId = function(self) return self.Helpers.DebuffTargetIDs() end,
+            targetId = function() return DebuffTargetIDs() end,
             cond = function(self, combat_state)
                 return combat_state == "Combat" and Casting.OkayToDebuff() and Core.CombatActionsCheck()
                     and self.Helpers.DebuffNamedOk()
@@ -570,7 +600,7 @@ local _ClassConfig    = {
             state = 1,
             steps = 1,
             load_cond = function() return Config:GetSetting('DoCripple') end,
-            targetId = function(self) return self.Helpers.DebuffTargetIDs() end,
+            targetId = function() return DebuffTargetIDs() end,
             cond = function(self, combat_state)
                 return combat_state == "Combat" and Casting.OkayToDebuff() and Core.CombatActionsCheck()
                     and self.Helpers.DebuffNamedOk()
@@ -640,33 +670,8 @@ local _ClassConfig    = {
             local tashSpell = self.ResolvedActionMap['TashSpell']
             return not (tashSpell and tashSpell() and tashSpell.Name() == "Echo of Tashan")
         end,
-        -- DebuffNamedOnly: Tash/Slow/Cripple (and AE variants in those rotations) on named only.
-        -- Prefer XT named haters over AutoTarget when the MA is still on trash (Mez stays higher via RotationOrder).
-        DebuffNamedOk = function()
-            if not Config:GetSetting('DebuffNamedOnly') then return true end
-            return Globals.AutoTargetIsNamed or Targeting.HasXTNamed()
-        end,
-        DebuffTargetIDs = function()
-            if not Config:GetSetting('DebuffNamedOnly') then
-                return Targeting.CheckForAutoTargetID()
-            end
-            local range = Config:GetSetting('AssistRange') or 100
-            local ids, seen = {}, {}
-            local function addNamed(id)
-                if not id or id <= 0 or seen[id] then return end
-                local spawn = mq.TLO.Spawn(id)
-                if not (spawn and spawn()) or spawn.Dead() or (spawn.Type() or "") == "Corpse" then return end
-                if not Targeting.IsNamed(spawn) then return end
-                if not spawn.LineOfSight() or (spawn.Distance() or 999) > range then return end
-                seen[id] = true
-                table.insert(ids, id)
-            end
-            if (Globals.AutoTargetID or 0) > 0 then addNamed(Globals.AutoTargetID) end
-            for _, id in ipairs(Targeting.GetXTHaterIDs()) do
-                addNamed(id)
-            end
-            return ids
-        end,
+        DebuffNamedOk = DebuffNamedOk,
+        DebuffTargetIDs = DebuffTargetIDs,
         ManaBuffChoice = function()
             if mq.TLO.Me.Level() >= 69 and mq.TLO.FindItem("=Legendary Timeless Belt of the Wise")() then
                 return "BeltItem"

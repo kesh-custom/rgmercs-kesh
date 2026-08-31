@@ -77,7 +77,7 @@ mq.event("CantSee", "You cannot see your target.", function()
                         if target.ID() > 0 and not Targeting.GetTargetDead(target) and not Targeting.GetTargetLOS(target) then
                             local desiredDistance
                             if Config:GetSetting('DoMelee') then
-                                -- Same distance as Engage / Stick (MaxRangeTo x 0.7 or Stick Distance).
+                                -- Same distance as Engage / Stick (flat default or Stick Distance).
                                 desiredDistance = Movement.GetEngageDistance(target.ID())
                             else
                                 desiredDistance = Targeting.GetTargetDistance() * .95
