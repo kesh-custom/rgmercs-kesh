@@ -210,6 +210,7 @@ local function tooFarHandler()
                     if Config:GetSetting('DoAutoEngage') and Combat.OkToEngage(target.ID() or 0) then
                         local engageDist = Movement.GetEngageDistance(target.ID())
                         local distance = Targeting.GetTargetDistance()
+                        local dist2d = (target.Distance and target.Distance()) or distance
                         if distance < 10 and distance < engageDist then
                             Logger.log_debug("TooFar: Too Far from Target (%s [%d]). Possible flyer detected. Moving back 10.", target.CleanName() or "", target.ID() or 0)
                             Core.DoCmd("/squelch /face fast")
@@ -219,6 +220,12 @@ local function tooFarHandler()
                             mq.delay(500, function() return not mq.TLO.Me.Moving() end)
                             Movement:DoStickCmd("off")
                             Movement:ClearLastStickTimer()
+                        elseif dist2d <= engageDist then
+                            local closeDist = Movement.TooFarCloseDist
+                            Logger.log_debug("TooFar: Already within stick range (%0.2f <= %d) but still Too Far (%s [%d]). Closing to %d.",
+                                dist2d, engageDist, target.CleanName() or "", target.ID() or 0, closeDist)
+                            Movement:NavInCombat(target.ID(), closeDist, true, true, true)
+                            Movement:DoStickCmd("%d id %d %s", closeDist, target.ID(), Movement.GetDefaultStickArgs())
                         else
                             Logger.log_debug("TooFar: Too Far from Target (%s [%d]). Naving to %d away.", target.CleanName() or "", target.ID() or 0, engageDist)
                             Movement:NavInCombat(target.ID(), engageDist, false, true, true)

@@ -102,6 +102,19 @@ Module.DefaultConfig                      = {
         Tooltip     = "Help lock a groupmate's loose charm with a configured ability (if your class has one).",
         ConfigType  = "Advanced",
     },
+    ['CharmStartCount']                        = {
+        DisplayName = "Charm Start Count",
+        Group       = "Abilities",
+        Header      = "Charm",
+        Category    = "Charm General",
+        Index       = 4,
+        Default     = 1,
+        Min         = 1,
+        Max         = 20,
+        Tooltip     = "Only auto-charm when at least this many XT Haters are present. Force Charm and Persistent re-charm ignore this.",
+        FAQ         = "Why isn't charm firing with Charm On?",
+        Answer      = "Charm Start Count waits for that many XT Haters first. Lower it, or use Force Charm / Persistent Charm to bypass.",
+    },
     -- Targets
     ['AutoLevelRangeCharm']                    = {
         DisplayName = "Auto Level Range",
@@ -880,6 +893,24 @@ function Module:FindCharmCandidate()
     return firstValid
 end
 
+-- True when auto-charm is allowed for the current XT Hater count.
+-- Force Charm and Persistent re-charm of a loose pet bypass the gate.
+function Module:CharmCrowdOk()
+    if Globals.ForceCharmID > 0 then return true end
+    if Config:GetSetting('PersistCharm') then
+        for _, data in pairs(self.TempSettings.CharmTracker) do
+            if data.loose then return true end
+        end
+    end
+    local haters = Targeting.GetXTHaterCount()
+    local need = Config:GetSetting('CharmStartCount') or 1
+    local ok = haters >= need
+    if not ok then
+        Logger.log_verbose("CharmCrowdOk - XTHaters(%d) < CharmStartCount(%d)", haters, need)
+    end
+    return ok
+end
+
 -- True while a charm is being ACQUIRED (a valid target exists and we don't yet hold our intended pet),
 -- so DPS rotations yield. False once a charm is stably held.
 function Module:NeedToCharm()
@@ -894,10 +925,12 @@ function Module:NeedToCharm()
     local charmOn = Config:GetSetting('CharmOn')
     local ready = charmOn and self:CharmReady()
     local havePet = (mq.TLO.Me.Pet.ID() or 0) > 0
-    local result = ready and not havePet and self:CurrentCharmTarget() > 0
+    local crowdOk = self:CharmCrowdOk()
+    local result = ready and not havePet and crowdOk and self:CurrentCharmTarget() > 0
 
-    Logger.log_verbose("NeedToCharm - CharmOn(%s) CharmReady(%s) HavePet(%s) => %s",
-        Strings.BoolToColorString(charmOn), Strings.BoolToColorString(ready), Strings.BoolToColorString(havePet), Strings.BoolToColorString(result))
+    Logger.log_verbose("NeedToCharm - CharmOn(%s) CharmReady(%s) HavePet(%s) CrowdOk(%s) => %s",
+        Strings.BoolToColorString(charmOn), Strings.BoolToColorString(ready), Strings.BoolToColorString(havePet),
+        Strings.BoolToColorString(crowdOk), Strings.BoolToColorString(result))
 
     self.TempSettings.LastNeedToCharmResult = result
     return result
@@ -1055,6 +1088,7 @@ function Module:DoCharm()
     if (mq.TLO.Me.Pet.ID() or 0) > 0 then return end
 
     if not self:CharmReady() then return end
+    if not self:CharmCrowdOk() then return end
 
     local target = self:CurrentCharmTarget()
     if target == 0 then return end
@@ -1253,6 +1287,11 @@ function Module:Render()
             ImGui.TableNextColumn(); Ui.RenderText("%s", petId > 0 and (mq.TLO.Me.Pet.DisplayName() or "None") or "None")
             ImGui.TableNextColumn(); Ui.RenderText("Charm State")
             ImGui.TableNextColumn(); Ui.RenderText("%s", charmState)
+            local haters = Targeting.GetXTHaterCount()
+            local need = Config:GetSetting('CharmStartCount') or 1
+            local crowdColor = haters >= need and Globals.Constants.Colors.ConditionMidColor or Globals.Constants.Colors.ConditionPassColor
+            ImGui.TableNextColumn(); Ui.RenderText("XT Haters")
+            ImGui.TableNextColumn(); Ui.RenderColoredText(crowdColor, "%d / %d", haters, need)
             ImGui.TableNextColumn(); Ui.RenderText("Force Charm ID")
             ImGui.TableNextColumn(); Ui.RenderText("%s",
                 Globals.ForceCharmID > 0 and string.format("%d (%s)", Globals.ForceCharmID, mq.TLO.Spawn(Globals.ForceCharmID).CleanName() or "?") or "None")

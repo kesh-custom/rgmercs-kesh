@@ -69,6 +69,8 @@ end
 Movement.HugeMobMaxRangeTo   = 25
 Movement.HugeMobStickDist    = 24
 Movement.DefaultStickDist    = 14
+-- TooFar while already inside stick range (stairs / Z): close to this instead of looping at 14.
+Movement.TooFarCloseDist     = 7
 
 function Movement.IsHugeMob(spawnId)
     local maxRange = tonumber(mq.TLO.Spawn(spawnId).MaxRangeTo()) or 0

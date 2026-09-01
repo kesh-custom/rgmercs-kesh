@@ -156,6 +156,9 @@ Module.DefaultServerClickies                  = {
             ['itemName'] = 'Draught of Opulent Healing I',
             ['target'] = 'Self',
             ['combat_state'] = 'Combat',
+            ['no_target_change'] = true,
+            ['skipTriggerCheck'] = true,
+            ['mustWait'] = false,
         },
         [2] = {
             ['conditions'] = {
@@ -172,6 +175,9 @@ Module.DefaultServerClickies                  = {
             ['itemName'] = 'Orb of Shadows',
             ['target'] = 'Main Assist',
             ['combat_state'] = 'Combat',
+            ['no_target_change'] = false,
+            ['skipTriggerCheck'] = true,
+            ['mustWait'] = false,
         },
         [3] = {
             ['conditions'] = {
@@ -188,6 +194,9 @@ Module.DefaultServerClickies                  = {
             ['itemName'] = 'Sanguine Mind Crystal III',
             ['target'] = 'Self',
             ['combat_state'] = 'Combat',
+            ['no_target_change'] = true,
+            ['skipTriggerCheck'] = true,
+            ['mustWait'] = false,
         },
         [4] = {
             ['conditions'] = {
@@ -208,6 +217,9 @@ Module.DefaultServerClickies                  = {
             ['itemName'] = 'Forsaken Fungus Covered Scale Tunic',
             ['target'] = 'Self',
             ['combat_state'] = 'Combat',
+            ['no_target_change'] = true,
+            ['skipTriggerCheck'] = false,
+            ['mustWait'] = false,
         },
         [5] = {
             ['conditions'] = {
@@ -224,6 +236,9 @@ Module.DefaultServerClickies                  = {
             ['itemName'] = 'Orb of Shadows',
             ['target'] = 'Self',
             ['combat_state'] = 'Combat',
+            ['no_target_change'] = false,
+            ['skipTriggerCheck'] = true,
+            ['mustWait'] = false,
         },
     },
 
@@ -234,6 +249,9 @@ Module.DefaultServerClickies                  = {
             ['itemName'] = 'Ring of the Warden',
             ['conditions'] = {},
             ['iconId'] = 6136,
+            ['no_target_change'] = true,
+            ['skipTriggerCheck'] = false,
+            ['mustWait'] = false,
         },
     },
 }
@@ -1238,7 +1256,7 @@ function Module:ValidateRotationName(rotationName, isHeal)
 end
 
 function Module:LoadSettings()
-    Base.LoadSettings(self, nil, function(settings, firstSaveRequired)
+    Base.LoadSettings(self, nil, function(_, firstSaveRequired)
         local settingsChanged = false
 
         -- insert default server clickies on very first run per PC
@@ -1248,7 +1266,7 @@ function Module:LoadSettings()
         end
 
         -- validate condition targets and rotation names.
-        local tempClickies = Tables.DeepCopy(settings.Clickies or {})
+        local tempClickies = Tables.DeepCopy(Config:GetSetting('Clickies') or {})
         for _, clicky in ipairs(tempClickies) do
             for _, cond in ipairs(clicky.conditions or {}) do
                 local blockDef = self.LogicBlocks[self.LogicBlockTypeIDs[cond.type]]
@@ -1607,6 +1625,20 @@ function Module:RenderClickyToggles(clicky, clickyIdx)
                 Config:SetSetting('Clickies', Config:GetSetting('Clickies'))
             end
             Ui.Tooltip("Wait and confirm that item use has started by checking that it has gone on cooldown or that a cast success is reported. Generally not needed.")
+
+            ImGui.TableNextColumn()
+            ImGui.AlignTextToFramePadding()
+            Ui.RenderText("Ignore Immune Check")
+            ImGui.TableNextColumn()
+            ImGui.BeginGroup()
+            local newIgnoreImmuneCheck, ignoreImmuneClicked = Ui.RenderOptionToggle("##clicky_ignore_immune_check_" .. clickyIdx, "",
+                clicky.ignoreImmuneCheck or false)
+            ImGui.EndGroup()
+            if ignoreImmuneClicked then
+                clicky.ignoreImmuneCheck = newIgnoreImmuneCheck
+                Config:SetSetting('Clickies', Config:GetSetting('Clickies'))
+            end
+            Ui.Tooltip("Use this clicky even when the target is flagged immune to its resist type.")
         end
 
         ImGui.EndTable()
@@ -2677,7 +2709,7 @@ function Module:GiveTime()
 
                             local readyCheckPassed = Casting.ItemReady(item.Name())
                             local element = itemSpell and itemSpell.ResistType and itemSpell.ResistType() or nil
-                            local elementCheckPassed = not Casting.ShouldSkipElement(element, target and target.ID() or 0)
+                            local elementCheckPassed = clicky.ignoreImmuneCheck or not Casting.ShouldSkipElement(element, target and target.ID() or 0)
 
                             if buffCheckPassed and distanceCheckPassed and readyCheckPassed and elementCheckPassed then
                                 Logger.log_verbose("\ayClicky: \awItem \am%s\aw Clicky Spell: \at%s\ag!", item.Name(), itemSpell.Name())
@@ -2735,6 +2767,7 @@ function Module:GetClickiesForRotations(clickyCombatState, rotationName)
             table.insert(result, {
                 name = clicky.itemName,
                 type = "Item",
+                IgnoreImmuneCheck = clicky.ignoreImmuneCheck,
                 from_clicky = true,
                 mustWait = clicky.mustWait,
                 cond = function(caller, itemName, targetSpawn)
@@ -2870,11 +2903,11 @@ end
 
 function Module:DoGetState()
     -- Reture a reasonable state if queried
-    local result = string.format("\awLoaded \ag%d\at Downtime Clickies and \ag%d\at Combat Clickies\n\n", #Config:GetSetting('DowntimeClickies'),
-        #Config:GetSetting('CombatClickies'))
+    local clickies = Config:GetSetting('Clickies')
+    local result = string.format("\awLoaded \ag%d\at Clickies\n\n", #clickies)
     result = result .. "-=-=-=-=-=\n"
 
-    for i, v in ipairs(Config:GetSetting('Clickies')) do
+    for i, v in ipairs(clickies) do
         result = result .. string.format("\atClicky %d: \ay%s\at\n", i, v.itemName)
     end
 

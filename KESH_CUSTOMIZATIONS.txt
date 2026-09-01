@@ -6,6 +6,8 @@ rgmercs-kesh カスタム内容メモ（現行）
 設定DB: config/rgmercs/（本家と共用）
 再構築: 2026-08-26（旧 kesh バックアップ: lua/rgmercs-kesh-backup-20260826-1902）
 追従  : 2026-08-27 casting GetTriggerSpells AutoCast(ID)（本家 #1395 / v2938）
+追従  : 2026-09-01 クリック Ignore Immune Check（本家 #1396）と DB 設定コピー修正（本家 #1397 / v2940）
+        Stick / ヒール / Off-Tank / Charm / EQ Might クラス差分は kesh のまま。
 
 目的: lua/rgmercs が公式更新で上書きされても、改造版を残す。
 
@@ -17,6 +19,7 @@ rgmercs-kesh カスタム内容メモ（現行）
   - BeforeResolveActions（BRD Psalm / SHD LifeTap 等）
   - Stick 自動距離 固定 14 / 巨大MOB 24（Nav と共通）
   - Charm クリック Abilities「Charm」フェーズ結合
+  - Charm Start Count（XT Hater 数が指定以上のときだけ自動 Charm）
   - HealPriorityPoint + GetHealScanThreshold（MaxHealPoint 廃止）
   - EQ Might クラス差分（enc/brd/wiz/rng/nec/clr/shd）
   - Named / Immune: 本家 Spawns モジュール + UseImmuneData（旧 named.lua 相当）
@@ -91,6 +94,7 @@ Rotation / Charm:
   - BeforeResolveActions: スペル解決直前に ClassConfig フック
   - Clickies「As a Charm Action」に Charm / Pre-Charm / Charm Assist
   - Charm Abilities リストに Charm フェーズ clicky を結合
+  - Charm Start Count: XT Hater 数が指定以上のときだけ自動 Charm（Force / Persist 再取得は除外）
 
 Stick:
   - 空欄時: 固定 14、MaxRangeTo >= 25 の巨大MOB は 24（Melee Nav も同じ値）
@@ -99,6 +103,7 @@ Stick:
   - 明示値あり: Nav / Stick ともその値
   - RNG Ranged Stick: Bow Range > 0 ならそれ、なければ Stick Distance / 自動
   - TooFar / CantSee（Melee）も GetEngageDistance に統一（大型の距離7特例を削除）
+  - TooFar フォールバック: すでに Stick 距離（2D）以内なのに Too Far なら Nav+Stick を 7 に詰める（段差用。flyer の moveback 10 は従来どおり優先）
 
 Tank Positioning:
   - Tank Reposition Mode: Nav Mesh / Stick Snaproll（Keep Mobs in Front の方式）
