@@ -419,11 +419,16 @@ function Module:EntryReady(entry, spell)
 end
 
 -- cast the resolved mez; AE spells allow a dead target (matching the old MezNow behavior)
+-- ST mez aborts mid-cast if the target becomes AutoTarget (kill target switched onto our mez mob)
 function Module:EntryCast(entry, spell, mezId, useAE)
     local entryType = (entry.type or ""):lower()
     local resolvedName = Core.GetResolvedActionMapItem(entry.name) or entry.name
     local name = (entryType == "aa" or entryType == "item" or entryType == "ability") and resolvedName or spell.RankName()
-    Casting.UseEntry(entryType, name, mezId, { allowDead = useAE, spell = spell, })
+    Casting.UseEntry(entryType, name, mezId, {
+        allowDead = useAE,
+        spell = spell,
+        abortIfAutoTarget = not useAE,
+    })
 end
 
 -- per-entry user toggle (defaults on; flat name->bool map)
@@ -559,9 +564,10 @@ function Module:MezAttempt(mezId, useAE)
     return waitForGem
 end
 
--- Bail a mez wait if we should stop, are backing off, or (mid-ST-wait) the crowd grew enough to want AE
-function Module:ShouldAbortMezWait(useAE)
+-- Bail a mez wait if we should stop, are backing off, ST target became AutoTarget, or (mid-ST-wait) the crowd grew enough to want AE
+function Module:ShouldAbortMezWait(useAE, mezId)
     if not Core.IsMezzing() or Globals.BackOffFlag then return true end
+    if not useAE and mezId and mezId > 0 and mezId == Globals.AutoTargetID then return true end
     if not useAE and self:CountCrowd() >= Config:GetSetting('MezAECount') and self:CountUnmezzed() > 0 and self:MezReady(true) then
         return true
     end
@@ -571,6 +577,16 @@ end
 -- Mez the target: attempt now, and if the chosen ability is busy, hold the tick for it (bounded, abortable).
 function Module:CastMez(mezId, useAE)
     Core.DoCmd("/attack off")
+
+    -- ST: never start mez on the kill target (refresh AutoTarget first so assist MA switches are current)
+    if not useAE then
+        Combat.FindBestAutoTarget()
+        if mezId == Globals.AutoTargetID then
+            Logger.log_debug("\ayCastMez(%d) :: Skipping ST mez - target is AutoTarget.", mezId)
+            return
+        end
+    end
+
     local currentTargetID = mq.TLO.Target.ID()
     Targeting.SetTarget(mezId, true)
 
@@ -579,7 +595,10 @@ function Module:CastMez(mezId, useAE)
         Casting.WaitForReady(
             function() return not self:MezAttempt(mezId, useAE) end,
             maxWaitToMez,
-            function() return self:ShouldAbortMezWait(useAE) end)
+            function()
+                Combat.FindBestAutoTarget()
+                return self:ShouldAbortMezWait(useAE, mezId)
+            end)
     end
 
     Targeting.SetTarget(currentTargetID, true)

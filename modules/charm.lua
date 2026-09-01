@@ -111,9 +111,9 @@ Module.DefaultConfig                      = {
         Default     = 1,
         Min         = 1,
         Max         = 20,
-        Tooltip     = "Only auto-charm when at least this many XT Haters are present. Force Charm and Persistent re-charm ignore this.",
+        Tooltip     = "Only auto-charm when at least this many XT Haters are in your Charm level range. Out-of-range haters are ignored. Force Charm and Persistent re-charm ignore this.",
         FAQ         = "Why isn't charm firing with Charm On?",
-        Answer      = "Charm Start Count waits for that many XT Haters first. Lower it, or use Force Charm / Persistent Charm to bypass.",
+        Answer      = "Charm Start Count waits for that many in-range XT Haters first (level range excluded). Lower it, or use Force Charm / Persistent Charm to bypass.",
     },
     -- Targets
     ['AutoLevelRangeCharm']                    = {
@@ -473,7 +473,12 @@ function Module:EntryCast(entry, spell, charmId)
     local entryType = (entry.type or ""):lower()
     local resolvedName = Core.GetResolvedActionMapItem(entry.name) or entry.name
     local name = (entryType == "aa" or entryType == "item" or entryType == "ability") and resolvedName or spell.RankName()
-    Casting.UseEntry(entryType, name, charmId, { spell = spell, })
+    -- Start Count >= 2: cancel mid-cast if this mob becomes the engage/kill target (Force/Persist bypass)
+    local abortEngage = self:ShouldExcludeEngageTargets() and not self:IsForceOrPersistCharm(charmId)
+    Casting.UseEntry(entryType, name, charmId, {
+        spell = spell,
+        abortIfAutoTarget = abortEngage,
+    })
 end
 
 -- per-list enable state (defaults on); scoping by listName lets a shared name toggle independently in each list
@@ -645,9 +650,14 @@ function Module:CharmAttempt(charmId)
     return false
 end
 
-function Module:ShouldAbortCharmWait()
+function Module:ShouldAbortCharmWait(charmId)
     if not Core.IsCharming() or Globals.BackOffFlag then return true end
     if (mq.TLO.Me.Pet.ID() or 0) > 0 then return true end
+    -- Mez-style: if Start Count >= 2 and this is not Force/Persist, abort once it becomes the kill target
+    if charmId and self:ShouldExcludeEngageTargets() and not self:IsForceOrPersistCharm(charmId)
+        and self:IsEngageTarget(charmId, true) then
+        return true
+    end
     return false
 end
 
@@ -655,7 +665,7 @@ end
 function Module:RunPreCharm(charmId)
     local target = mq.TLO.Target
     for _, entry in ipairs(self:GetPreCharmAbilities()) do
-        if self:ShouldAbortCharmWait() then
+        if self:ShouldAbortCharmWait(charmId) then
             Logger.log_debug("\ayRunPreCharm :: aborting - charming=%s pet=%d backoff=%s", tostring(Core.IsCharming()), mq.TLO.Me.Pet.ID() or 0, tostring(Globals.BackOffFlag))
             return
         end
@@ -668,7 +678,7 @@ function Module:RunPreCharm(charmId)
             ---@cast spell MQSpell
             if not self:EntryReady(entry, spell) and self:EntryIsGemmed(entry) and Casting.GemReady(spell) then
                 Logger.log_debug("\ayRunPreCharm :: %s waiting for gem", entry.name or "?")
-                Casting.WaitForReady(function() return self:EntryReady(entry, spell) end, 1500, function() return self:ShouldAbortCharmWait() end)
+                Casting.WaitForReady(function() return self:EntryReady(entry, spell) end, 1500, function() return self:ShouldAbortCharmWait(charmId) end)
             end
             if self:EntryReady(entry, spell) then
                 if (entry.type or ""):lower() ~= "ability" and (spell.MyCastTime() or 0) > 0 then self:StopCast() end
@@ -685,8 +695,16 @@ end
 
 -- Charm the target: pre-steps (resist-debuff, mez-lock) then charm, all blocking; restore target on every path.
 function Module:CastCharm(charmId)
+    -- Mez-style gate for auto-charm when Start Count >= 2 (Force/Persist bypass)
+    if self:ShouldExcludeEngageTargets() and not self:IsForceOrPersistCharm(charmId)
+        and self:IsEngageTarget(charmId, true) then
+        Logger.log_debug("CastCharm: skipping engage target %d", charmId)
+        return
+    end
+
     Core.DoCmd("/attack off")
     local restoreTargetID = mq.TLO.Target.ID()
+    if restoreTargetID == 0 then restoreTargetID = Globals.AutoTargetID or 0 end
     Targeting.SetTarget(charmId, true)
 
     -- never cast on a mob that became a pet (ours or a peer's) since we picked it
@@ -699,12 +717,19 @@ function Module:CastCharm(charmId)
     -- pre-charm sequence: run the class's PreCharm list (resist debuffs, mez lock, ...), each cond-gated
     self:RunPreCharm(charmId)
 
-    if self:CharmAttempt(charmId) then
-        local maxWait = 1500 + (mq.TLO.Window("CastingWindow").Open() and (mq.TLO.Me.Casting.MyCastTime() or 3000) or 0)
-        Casting.WaitForReady(function() return not self:CharmAttempt(charmId) end, maxWait, function() return self:ShouldAbortCharmWait() end)
+    if self:ShouldAbortCharmWait(charmId) then
+        Targeting.SetTarget(restoreTargetID, true)
+        return
     end
 
-    Targeting.SetTarget(restoreTargetID, true)
+    if self:CharmAttempt(charmId) then
+        local maxWait = 1500 + (mq.TLO.Window("CastingWindow").Open() and (mq.TLO.Me.Casting.MyCastTime() or 3000) or 0)
+        Casting.WaitForReady(function() return not self:CharmAttempt(charmId) end, maxWait, function() return self:ShouldAbortCharmWait(charmId) end)
+    end
+
+    if restoreTargetID > 0 then
+        Targeting.SetTarget(restoreTargetID, true)
+    end
 end
 
 -- Tracker
@@ -838,6 +863,37 @@ end
 
 -- Targeting / validation
 
+--- True if this spawn is (or just became) the kill/engage target.
+---@param mobId number
+---@param refreshAuto boolean? Refresh AutoTarget first (for mid-loop / pre-cast checks).
+---@return boolean
+function Module:IsEngageTarget(mobId, refreshAuto)
+    if not mobId or mobId <= 0 then return false end
+    if refreshAuto then
+        Combat.FindBestAutoTarget(Combat.OkToEngagePreValidateId)
+    end
+    if mobId == Globals.AutoTargetID then return true end
+    if mobId == (Globals.ForceTargetID or 0) then return true end
+    if mobId == (Globals.ForceCombatID or 0) then return true end
+    return false
+end
+
+--- When Start Count is 2+, auto-charm excludes engage targets (Mez-style). Force/Persist still ignore.
+---@return boolean
+function Module:ShouldExcludeEngageTargets()
+    return (Config:GetSetting('CharmStartCount') or 1) >= 2
+end
+
+--- Force Charm directive or Persistent re-charm of a loose pet — bypass engage exclusion.
+---@param charmId number
+---@return boolean
+function Module:IsForceOrPersistCharm(charmId)
+    if not charmId or charmId <= 0 then return false end
+    if Globals.ForceCharmID > 0 and Globals.ForceCharmID == charmId then return true end
+    local data = self.TempSettings.CharmTracker[charmId]
+    return data ~= nil and data.loose == true
+end
+
 ---@param mobId number
 ---@return boolean true if this mob is a valid charm candidate
 function Module:IsValidCharmTarget(mobId)
@@ -859,15 +915,38 @@ function Module:IsValidCharmTarget(mobId)
 end
 
 -- scan nearby npcs for the best charm candidate; returns an id or 0
-function Module:FindCharmCandidate()
-    local charmSpell = self:ResolveCharmSpell()
+function Module:GetCharmLevelRange()
     local minLevel = Config:GetSetting('CharmMinLevel')
     local maxLevel = Config:GetSetting('CharmMaxLevel')
-    if Config:GetSetting('AutoLevelRangeCharm') and charmSpell and charmSpell() then
-        minLevel = 0
-        ---@diagnostic disable-next-line: undefined-field
-        maxLevel = charmSpell.MaxLevel() or maxLevel
+    if Config:GetSetting('AutoLevelRangeCharm') then
+        local charmSpell = self:ResolveCharmSpell()
+        if charmSpell and charmSpell() then
+            minLevel = 0
+            ---@diagnostic disable-next-line: undefined-field
+            maxLevel = charmSpell.MaxLevel() or maxLevel
+        end
     end
+    return minLevel, maxLevel
+end
+
+-- XT Haters whose level falls inside the current Charm min/max range.
+function Module:CountCharmableXTHaters()
+    local minLevel, maxLevel = self:GetCharmLevelRange()
+    local count = 0
+    for _, id in ipairs(Targeting.GetXTHaterIDs()) do
+        local spawn = mq.TLO.Spawn(id)
+        if spawn and spawn() then
+            local level = spawn.Level() or 0
+            if level >= minLevel and level <= maxLevel then
+                count = count + 1
+            end
+        end
+    end
+    return count
+end
+
+function Module:FindCharmCandidate()
+    local minLevel, maxLevel = self:GetCharmLevelRange()
 
     local npcType = ''
     if Core.MyClassIs("DRU") then
@@ -878,22 +957,30 @@ function Module:FindCharmCandidate()
     local searchString = string.format("npc nopet radius %d zradius %d range %d %d targetable playerstate 4%s",
         Config:GetSetting('CharmRadius'), Config:GetSetting('CharmZRadius'), minLevel, maxLevel, npcType)
 
-    -- prefer any valid candidate over the group's kill target; only charm the auto-target if it's the lone option
-    local autoId = Globals.AutoTargetID or 0
+    -- Prefer non-engage. When Start Count >= 2, never fall back to AutoTarget/ForceTarget/ForceCombat.
+    -- When Start Count is 1, engage (usually AutoTarget) is allowed only as last resort.
+    local excludeEngage = self:ShouldExcludeEngageTargets()
     local firstValid = 0
     local count = mq.TLO.SpawnCount(searchString)()
     for i = 1, count do
         local spawn = mq.TLO.NearestSpawn(i, searchString)
         local id = (spawn and spawn() and spawn.ID()) or 0
         if id > 0 and self:IsValidCharmTarget(id) then
-            if firstValid == 0 then firstValid = id end
-            if id ~= autoId then return id end
+            local isEngage = self:IsEngageTarget(id, false)
+            if excludeEngage and isEngage then
+                -- skip kill target on multi-mob charm pulls
+            elseif not isEngage then
+                return id
+            elseif firstValid == 0 then
+                firstValid = id
+            end
         end
     end
+    if excludeEngage then return 0 end
     return firstValid
 end
 
--- True when auto-charm is allowed for the current XT Hater count.
+-- True when auto-charm is allowed for the current in-range XT Hater count.
 -- Force Charm and Persistent re-charm of a loose pet bypass the gate.
 function Module:CharmCrowdOk()
     if Globals.ForceCharmID > 0 then return true end
@@ -902,11 +989,11 @@ function Module:CharmCrowdOk()
             if data.loose then return true end
         end
     end
-    local haters = Targeting.GetXTHaterCount()
+    local haters = self:CountCharmableXTHaters()
     local need = Config:GetSetting('CharmStartCount') or 1
     local ok = haters >= need
     if not ok then
-        Logger.log_verbose("CharmCrowdOk - XTHaters(%d) < CharmStartCount(%d)", haters, need)
+        Logger.log_verbose("CharmCrowdOk - in-range XTHaters(%d) < CharmStartCount(%d)", haters, need)
     end
     return ok
 end
@@ -1287,10 +1374,10 @@ function Module:Render()
             ImGui.TableNextColumn(); Ui.RenderText("%s", petId > 0 and (mq.TLO.Me.Pet.DisplayName() or "None") or "None")
             ImGui.TableNextColumn(); Ui.RenderText("Charm State")
             ImGui.TableNextColumn(); Ui.RenderText("%s", charmState)
-            local haters = Targeting.GetXTHaterCount()
+            local haters = self:CountCharmableXTHaters()
             local need = Config:GetSetting('CharmStartCount') or 1
             local crowdColor = haters >= need and Globals.Constants.Colors.ConditionMidColor or Globals.Constants.Colors.ConditionPassColor
-            ImGui.TableNextColumn(); Ui.RenderText("XT Haters")
+            ImGui.TableNextColumn(); Ui.RenderText("XT Haters (in range)")
             ImGui.TableNextColumn(); Ui.RenderColoredText(crowdColor, "%d / %d", haters, need)
             ImGui.TableNextColumn(); Ui.RenderText("Force Charm ID")
             ImGui.TableNextColumn(); Ui.RenderText("%s",

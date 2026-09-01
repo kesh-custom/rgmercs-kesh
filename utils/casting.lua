@@ -2014,17 +2014,18 @@ end
 --- @param entryType string One of "aa"|"item"|"song"|"disc"|"ability"|"spell"; anything unrecognized is treated as a spell.
 --- @param name string The resolved name to cast (an AA/item name, or a spell/song RankName); unused for disc, which casts opts.spell.
 --- @param targetId? number The target spawn ID.
---- @param opts? table Optional flags: { allowMem = boolean, allowDead = boolean, spell = MQSpell (the disc's spell object) }.
+--- @param opts? table Optional flags: { allowMem = boolean, allowDead = boolean, spell = MQSpell, abortIfAutoTarget = boolean, abortIf = function? }.
 --- @return boolean success
 function Casting.UseEntry(entryType, name, targetId, opts)
     opts = opts or {}
     entryType = (entryType or ""):lower()
-    if entryType == "aa" then return Casting.UseAA(name, targetId, opts.allowDead) end
-    if entryType == "item" then return Casting.UseItem(name, targetId, opts.allowDead) end
-    if entryType == "song" then return Casting.UseSong(name, targetId, opts.allowMem) end
+    local castOpts = { abortIfAutoTarget = opts.abortIfAutoTarget, abortIf = opts.abortIf, }
+    if entryType == "aa" then return Casting.UseAA(name, targetId, opts.allowDead, nil, nil, castOpts) end
+    if entryType == "item" then return Casting.UseItem(name, targetId, opts.allowDead, nil, nil, castOpts) end
+    if entryType == "song" then return Casting.UseSong(name, targetId, opts.allowMem, nil, castOpts) end
     if entryType == "disc" then return Casting.UseDisc(opts.spell, targetId) end
     if entryType == "ability" then return Casting.UseAbility(name, targetId) end
-    return Casting.UseSpell(name, targetId, opts.allowMem, opts.allowDead)
+    return Casting.UseSpell(name, targetId, opts.allowMem, opts.allowDead, nil, castOpts)
 end
 
 --- Casts a spell on a target. Bards are routed to UseSong.
@@ -2033,14 +2034,15 @@ end
 --- @param bAllowMem boolean Whether to allow the spell to be memorized if not already.
 --- @param bAllowDead boolean? Whether to allow casting the spell on a dead target.
 --- @param retryCount number? The number of times to retry casting the spell if it fails.
+--- @param castOpts table? Optional { abortIfAutoTarget = boolean, abortIf = function? }.
 --- @return boolean success Returns true if the spell was successfully cast, false otherwise.
 --- @return boolean|nil isGroup Returns true if the spell is a group-affecting target type.
-function Casting.UseSpell(spellName, targetId, bAllowMem, bAllowDead, retryCount)
+function Casting.UseSpell(spellName, targetId, bAllowMem, bAllowDead, retryCount, castOpts)
     local me = mq.TLO.Me
     if not targetId then targetId = mq.TLO.Target.ID() end
     -- Immediately send bards to the song handler.
     if me.Class.ShortName():lower() == "brd" then
-        return Casting.UseSong(spellName, targetId, bAllowMem, retryCount)
+        return Casting.UseSong(spellName, targetId, bAllowMem, retryCount, castOpts)
     end
 
     local spell = mq.TLO.Spell(spellName)
@@ -2161,6 +2163,8 @@ function Casting.UseSpell(spellName, targetId, bAllowMem, bAllowDead, retryCount
         spellRange = spellRange,
         castTime = castTime,
         retryCount = retryCount,
+        abortIfAutoTarget = castOpts and castOpts.abortIfAutoTarget,
+        abortIf = castOpts and castOpts.abortIf,
     })
     if Globals.StopCast then return false end
 
@@ -2177,8 +2181,12 @@ end
 --- @param targetId? number The ID of the target on which the song will be used.
 --- @param bAllowMem boolean A flag indicating whether memorization is allowed.
 --- @param retryCount number? The number of times to retry using the song if it fails.
+--- @param castOpts table? Optional { abortIfAutoTarget = boolean, abortIf = function? }.
 --- @return boolean True if we were able to sing the song, false otherwise
-function Casting.UseSong(songName, targetId, bAllowMem, retryCount)
+function Casting.UseSong(songName, targetId, bAllowMem, retryCount, castOpts)
+    castOpts = castOpts or {}
+    local abortIfAutoTarget = castOpts.abortIfAutoTarget
+    local abortIf = castOpts.abortIf
     local me = mq.TLO.Me
     if not targetId then targetId = mq.TLO.Target.ID() end
 
@@ -2293,6 +2301,12 @@ function Casting.UseSong(songName, targetId, bAllowMem, retryCount)
                     Logger.log_debug("\ayUseSong(): Canceled singing %s because spellTarget(%d, range %d) is out of spell range(%d)", songName, targetSpawn.ID(),
                         Targeting.GetTargetDistance(targetSpawn), spellRange)
                     cancel = true
+                elseif abortIfAutoTarget and targetId and targetId > 0 and targetId == Globals.AutoTargetID then
+                    Logger.log_debug("\ayUseSong(): Canceled singing %s because target (%d) is now AutoTarget.", songName, targetId)
+                    cancel = true
+                elseif abortIf and abortIf() then
+                    Logger.log_debug("\ayUseSong(): Canceled singing %s because abortIf returned true.", songName)
+                    cancel = true
                 elseif Globals.StopCast then
                     Logger.log_debug("\ayUseSong(): Canceled singing %s because of stopcast command.", songName)
                     cancel = true
@@ -2308,6 +2322,9 @@ function Casting.UseSong(songName, targetId, bAllowMem, retryCount)
 
             if scanTimer % 500 == 0 then
                 Casting.RescanCombatTargets()
+                if abortIfAutoTarget then
+                    Combat.FindBestAutoTarget()
+                end
                 Modules:ExecModule("Class", "DoMidSongEngage", targetId)
             end
 
@@ -2493,6 +2510,8 @@ end
 ---   - spellRange (number?)  Effective spell range.
 ---   - castTime   (number?)  Reported cast time in ms (0 for instants).
 ---   - retryCount (number?)  Additional attempts allowed on retriable failures.
+---   - abortIfAutoTarget (boolean?) cancel mid-cast when targetId becomes AutoTarget (ST mez/charm).
+---   - abortIf (function?) optional () -> boolean; when true, StopCast and return.
 function Casting.RunCastLoop(opts)
     local cmd = opts.cmd
     local readyCheck = opts.readyCheck
@@ -2502,6 +2521,8 @@ function Casting.RunCastLoop(opts)
     local spellRange = opts.spellRange
     local castTime = opts.castTime or 0
     local retryCount = opts.retryCount or Config:GetSetting('CastRetryCount')
+    local abortIfAutoTarget = opts.abortIfAutoTarget
+    local abortIf = opts.abortIf
 
     Casting.SetLastCastResult(Globals.Constants.CastResults.CAST_RESULT_NONE)
 
@@ -2535,7 +2556,7 @@ function Casting.RunCastLoop(opts)
         -- Active discs confirm via ActiveDisc.ID above and have no cast bar to wait on.
         if mq.TLO.Me.Casting() and not isActiveDisc then
             Logger.log_verbose("\ayRunCastLoop(): Started to cast: %s - waiting to finish", actionName)
-            Casting.WaitCastFinish(targetId, bAllowDead, spellRange, castTime)
+            Casting.WaitCastFinish(targetId, bAllowDead, spellRange, castTime, abortIfAutoTarget, abortIf)
         end
         if Globals.StopCast then
             Logger.log_verbose("\atRunCastLoop(): Canceled casting %s due to stopcast command.", actionName)
@@ -2558,9 +2579,11 @@ end
 --- @param targetId? number The ID of the target on which to use the AA ability.
 --- @param bAllowDead boolean? Whether to allow casting on a dead target.
 --- @param retryCount number? The number of times to retry if the cast fails.
+--- @param fireAndForget boolean?
+--- @param castOpts table? Optional { abortIfAutoTarget = boolean, abortIf = function? }.
 --- @return boolean success True if the AA ability was successfully used, false otherwise.
 --- @return boolean|nil isGroup True if the AA is a group-affecting target type.
-function Casting.UseAA(aaName, targetId, bAllowDead, retryCount, fireAndForget)
+function Casting.UseAA(aaName, targetId, bAllowDead, retryCount, fireAndForget, castOpts)
     local me = mq.TLO.Me
     if not targetId then targetId = mq.TLO.Target.ID() end
 
@@ -2645,6 +2668,8 @@ function Casting.UseAA(aaName, targetId, bAllowDead, retryCount, fireAndForget)
         castTime = castTime,
         retryCount = retryCount,
         fireAndForget = fireAndForget,
+        abortIfAutoTarget = castOpts and castOpts.abortIfAutoTarget,
+        abortIf = castOpts and castOpts.abortIf,
     })
     if Globals.StopCast then return false end
 
@@ -2685,9 +2710,11 @@ end
 --- @param targetId number|nil The ID of the target on which the item will be used. May be nil for untargeted items.
 --- @param bAllowDead boolean? Whether to allow using the item on a dead target.
 --- @param retryCount number? The number of times to retry if the use fails.
+--- @param fireAndForget boolean?
+--- @param castOpts table? Optional { abortIfAutoTarget = boolean, abortIf = function? }.
 --- @return boolean success True if the item was successfully used, false otherwise.
 --- @return boolean|nil isGroup True if the item's spell is a group-affecting target type.
-function Casting.UseItem(itemName, targetId, bAllowDead, retryCount, fireAndForget)
+function Casting.UseItem(itemName, targetId, bAllowDead, retryCount, fireAndForget, castOpts)
     local me = mq.TLO.Me
 
     if not itemName then
@@ -2776,6 +2803,8 @@ function Casting.UseItem(itemName, targetId, bAllowDead, retryCount, fireAndForg
         castTime = castTime,
         retryCount = retryCount,
         fireAndForget = fireAndForget,
+        abortIfAutoTarget = castOpts and castOpts.abortIfAutoTarget,
+        abortIf = castOpts and castOpts.abortIf,
     })
     if Globals.StopCast then return false end
 
@@ -2810,7 +2839,9 @@ end
 --- @param bAllowDead boolean Whether to allow the target to be dead.
 --- @param spellRange number The max range of the spell.
 --- @param castTime number|nil The length of the spell's cast.
-function Casting.WaitCastFinish(targetId, bAllowDead, spellRange, castTime)
+--- @param abortIfAutoTarget boolean? If true, cancel when targetId becomes AutoTarget (ST mez/charm).
+--- @param abortIf function? Optional () -> boolean; when true, StopCast and return.
+function Casting.WaitCastFinish(targetId, bAllowDead, spellRange, castTime, abortIfAutoTarget, abortIf)
     local maxWaitOrig = (castTime or 5000) + ((mq.TLO.EverQuest.Ping() * 20) + 1000)
     local maxWait = maxWaitOrig
 
@@ -2819,6 +2850,12 @@ function Casting.WaitCastFinish(targetId, bAllowDead, spellRange, castTime)
         local currentCast = mq.TLO.Me.Casting()
         Logger.log_super_verbose("WaitCastFinish(): Waiting to Finish Casting...")
         mq.delay(20)
+
+        if abortIf and abortIf() then
+            mq.TLO.Me.StopCast()
+            Logger.log_debug("WaitCastFinish(): Canceled casting %s because abortIf returned true.", currentCast)
+            return
+        end
 
         if targetId and targetId > 0 then
             local target = mq.TLO.Spawn(targetId)
@@ -2831,6 +2868,15 @@ function Casting.WaitCastFinish(targetId, bAllowDead, spellRange, castTime)
                 Logger.log_debug("WaitCastFinish(): Canceled casting %s because spellTarget(%d, range %d) is out of spell range(%d)", currentCast, target.ID(),
                     Targeting.GetTargetDistance(), spellRange)
                 return
+            elseif abortIfAutoTarget and Globals.AutoTargetID > 0 and targetId == Globals.AutoTargetID then
+                mq.TLO.Me.StopCast()
+                Logger.log_debug("WaitCastFinish(): Canceled casting %s because target (%d) is now AutoTarget.", currentCast, targetId)
+                return
+            elseif abortIfAutoTarget and ((Globals.ForceTargetID or 0) > 0 and targetId == Globals.ForceTargetID
+                    or (Globals.ForceCombatID or 0) > 0 and targetId == Globals.ForceCombatID) then
+                mq.TLO.Me.StopCast()
+                Logger.log_debug("WaitCastFinish(): Canceled casting %s because target (%d) is now ForceTarget/ForceCombat.", currentCast, targetId)
+                return
             elseif target() and not Targeting.TargetIsMyself(target) and target.ID() ~= Targeting.GetTargetID() then
                 Logger.log_debug("WaitCastFinish(): Warning your spellTarget(%d) for %s is no longer your currentTarget(%d)", target.ID(), currentCast, Targeting.GetTargetID())
             end
@@ -2842,6 +2888,10 @@ function Casting.WaitCastFinish(targetId, bAllowDead, spellRange, castTime)
                 if Targeting.GetTargetPctHPs(Targeting.GetAutoTarget()) <= Config:GetSetting('PetEngagePct') then
                     Combat.PetAttack(Globals.AutoTargetID, true)
                 end
+            end
+            if abortIfAutoTarget then
+                -- assist AutoTarget refresh (Rescan only updates for MA)
+                Combat.FindBestAutoTarget()
             end
         end
         if currentWait % 500 == 0 then
