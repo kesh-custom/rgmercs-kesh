@@ -111,6 +111,7 @@ Stick:
   - RNG Ranged Stick: Bow Range > 0 ならそれ、なければ Stick Distance / 自動
   - TooFar / CantSee（Melee）も GetEngageDistance に統一（大型の距離7特例を削除）
   - TooFar フォールバック: すでに Stick 距離（2D）以内なのに Too Far なら Nav+Stick を 7 に詰める（段差用。flyer の moveback 10 は従来どおり優先）
+  - TooFar / CantSee（戦闘）: 詠唱中（非 BRD）は Nav/Stick  reposition をスキップ（Chase ShouldFollow と同規則）
 
 Tank Positioning:
   - Tank Reposition Mode: Nav Mesh / Stick Snaproll（Keep Mobs in Front の方式）

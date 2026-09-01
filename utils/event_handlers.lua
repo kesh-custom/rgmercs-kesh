@@ -12,6 +12,16 @@ local Movement    = require("utils.movement")
 local Strings     = require("utils.strings")
 local Targeting   = require("utils.targeting")
 
+--- Skip combat reposition while casting (same rule as Movement ShouldFollow).
+---@param eventName string Log label for verbose message.
+---@return boolean True if the handler should return early.
+local function skipRepositionWhileCasting(eventName)
+    if mq.TLO.Me.Casting() and not Core.MyClassIs("brd") then
+        Logger.log_verbose("%s: skipping reposition while casting.", eventName)
+        return true
+    end
+    return false
+end
 
 -- [ CANT SEE HANDLERS ] --
 
@@ -34,6 +44,11 @@ mq.event("CantSee", "You cannot see your target.", function()
 
     -- Ignore a can't-see on a transient target swap (aggro tool/mez/charm); only reposition while pulling or for our actual engagement target.
     if not pullPulling and not pullReturn and Globals.AutoTargetID > 0 and (target.ID() or 0) ~= Globals.AutoTargetID then return end
+
+    if not pullPulling and not pullReturn and skipRepositionWhileCasting("CantSee") then
+        mq.flushevents("CantSee")
+        return
+    end
 
     if mq.TLO.Stick.Active() then
         Movement:DoStickCmd("off")
@@ -181,6 +196,8 @@ local function tooFarHandler()
 
     -- Ignore a too-far on a transient target swap (aggro tool/mez/charm); only reposition while pulling or for our actual engagement target.
     if not pullPulling and not pullReturn and Globals.AutoTargetID > 0 and (target.ID() or 0) ~= Globals.AutoTargetID then return end
+
+    if not pullPulling and not pullReturn and skipRepositionWhileCasting("TooFar") then return end
 
     if mq.TLO.Stick.Active() then
         Movement:DoStickCmd("off")
