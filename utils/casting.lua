@@ -1905,6 +1905,67 @@ function Casting.MoveBlocksCast(castTimeMs)
     return mq.TLO.Me.Moving() and (castTimeMs or -1) > 0
 end
 
+--- Minimum cast time (ms) for combat post-move settle (spells, AA, clickies).
+Casting.CombatCastSettleMinCastMs = 101
+
+--- Post-move settle before combat casts: same floor as RunCastLoop (max(300ms, 3×Ping)).
+---@return number Settle duration in seconds.
+function Casting.GetCombatCastSettleSec()
+    return math.max(0.3, 3 * (mq.TLO.EverQuest.Ping() or 0) / 1000)
+end
+
+--- True when cast time is long enough to require combat settle (>= 101ms).
+---@param castTimeMs number?
+---@return boolean
+function Casting.HasCombatCastSettleCastTime(castTimeMs)
+    return (castTimeMs or 0) >= Casting.CombatCastSettleMinCastMs
+end
+
+--- True when a timed cast in combat should wait for movement/nav to finish and settle.
+---@param castTimeMs number?
+---@return boolean
+function Casting.CombatCastSettleNeeded(castTimeMs)
+    if Core.MyClassIs("brd") or not Casting.HasCombatCastSettleCastTime(castTimeMs) then return false end
+    return Globals.CurrentState == "Combat" or Targeting.HasXTHaters()
+end
+
+--- Non-blocking gate for SpellReady / ItemReady (true = ok to cast).
+---@param castTimeMs number?
+---@return boolean
+function Casting.CombatCastSettleMovingCheck(castTimeMs)
+    if not Casting.CombatCastSettleNeeded(castTimeMs) then return true end
+    return not mq.TLO.Me.Moving()
+        and not mq.TLO.Navigation.Active()
+        and not mq.TLO.MoveTo.Moving()
+        and Movement:GetTimeSinceLastPositionChange() >= Casting.GetCombatCastSettleSec()
+end
+
+--- Wait until nav/movement stops, then until position is stable for GetCombatCastSettleSec().
+---@param castTimeMs number?
+function Casting.WaitCombatCastSettle(castTimeMs)
+    if not Casting.CombatCastSettleNeeded(castTimeMs) then return end
+
+    local settleSec = Casting.GetCombatCastSettleSec()
+    local deadline = mq.gettime() + 5000
+
+    while mq.gettime() < deadline do
+        if Globals.StopCast or Globals.PauseMain then return end
+
+        local moving = mq.TLO.Me.Moving() or mq.TLO.Navigation.Active() or mq.TLO.MoveTo.Moving()
+        local sincePos = Movement:GetTimeSinceLastPositionChange()
+        if not moving and sincePos >= settleSec then
+            Logger.log_verbose("WaitCombatCastSettle(): ready (settle=%.0fms, sincePos=%.0fms).", settleSec * 1000, sincePos * 1000)
+            return
+        end
+
+        mq.delay(50)
+        mq.doevents()
+        Events.DoEvents()
+    end
+
+    Logger.log_verbose("WaitCombatCastSettle(): timed out after 5s (settle=%.0fms).", settleSec * 1000)
+end
+
 --- Checks CombatAbilityReady for the disc's ranked name, then runs CastCheck allowing movement and, for bards with an instant-cast disc (0 cast time), allowing an open casting window.
 --- @param discSpell MQSpell The name of the discipline spell to check.
 --- @return boolean Returns true if the discipline is ready, false otherwise.
@@ -1971,6 +2032,7 @@ function Casting.ItemReady(itemName)
     local clicky = mq.TLO.FindItem("=" .. itemName).Clicky
     local levelCheck = me.Level() >= (clicky.RequiredLevel() or 0)
     local movingCheck = not Casting.MoveBlocksCast(clicky.CastTime())
+        and Casting.CombatCastSettleMovingCheck(clicky.CastTime())
     local controlCheck = not (me.Stunned() or me.Feared() or me.Charmed() or me.Mezzed())
 
     Logger.log_verbose("ItemReady for %s: LevelCheck(%s) MovingCheck(%s) ControlCheck(%s)", itemName, Strings.BoolToColorString(levelCheck),
@@ -1991,6 +2053,9 @@ function Casting.CastCheck(spell, bAllowMove)
     local me = mq.TLO.Me
     local castingCheck = Casting.CanActMidSong(spell.MyCastTime()) or (not (me.Casting() or mq.TLO.Window("CastingWindow").Open()))
     local movingCheck = bAllowMove or not Casting.MoveBlocksCast(spell.MyCastTime())
+    if not bAllowMove then
+        movingCheck = movingCheck and Casting.CombatCastSettleMovingCheck(spell.MyCastTime())
+    end
 
     local currentMana = me.CurrentMana()
     local currentEnd = me.CurrentEndurance()
@@ -2533,7 +2598,7 @@ function Casting.RunCastLoop(opts)
     end
 
     -- give a small delay for when we need to rely on an action changing to "not ready" to detect success, this is data from the server. values tested on laz/might numerous times
-    local floor = math.max(300, 3 * (mq.TLO.EverQuest.Ping() or 0))
+    local floor = Casting.GetCombatCastSettleSec() * 1000
     local delay = castTime < floor and floor or castTime
 
     repeat
@@ -2541,6 +2606,9 @@ function Casting.RunCastLoop(opts)
         -- Active discs hold for discs to become active; other instants only hold until they go on cooldown.
         local isActiveDisc = castTime == 0 and Casting.IsActiveDisc(actionName)
         local confirmOnDisc = isActiveDisc and not mq.TLO.Me.ActiveDisc.ID()
+        if Casting.CombatCastSettleNeeded(castTime) then
+            Casting.WaitCombatCastSettle(castTime)
+        end
         Core.DoCmd(cmd)
         Logger.log_verbose("\ayRunCastLoop(): Waiting to start cast: %s (delay=%dms)", actionName, delay)
         mq.delay(delay, function()
