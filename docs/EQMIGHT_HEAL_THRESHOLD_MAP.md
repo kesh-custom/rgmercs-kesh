@@ -14,7 +14,7 @@
 | **旧** `GroupHealsNeeded` | `Group.Injured(GroupHealPoint) >= GroupInjureCnt`（MQ TLO。Injured は通常 **未満**） | 同上 |
 | **旧** `BigGroupHealsNeeded` | `Group.Injured(BigHealPoint) >= GroupInjureCnt` | 同上 |
 | **旧** 対象スキャン `FindWorstHurtGroupMember(minHPs)` | `PctHPs < minHPs` | `utils/combat.lua` |
-| **新** `Helpers.ClassBelow(kind, target)` | `PctHPs <= HealPct{kind}_{CLASS}`。**0 は無効** | 各 class_config |
+| **新** `Helpers.ClassBelow(kind, target)` | `PctHPs <= HealPct{kind}_{Role|CLASS}`。**0 は無効** | 各 class_config |
 | **新** グループ判定 | `ClassBelow` を満たす人数 `>= GroupInjureCnt` | 各 class_config |
 
 したがって旧 `BigHealPoint = 50` と新 `HealPctFastHeal_* = 50` は **同じ数字でも一致しない**。  
@@ -27,7 +27,7 @@
 
 ## 2. 設定キー対応（グローバル → クラス別）
 
-旧は **全クラス共通の1本**。新は **対象クラスごとに1本**（キー形式 `HealPct{Kind}_{CLASS}`。`CLASS` は WAR/SHD/PAL/…/OTH）。
+旧は **全クラス共通の1本**。新は **対象ロールごとに1本**（CLR/PAL/DRU/SHM: `HealPct{Kind}_{Tank|Melee|Caster}`）。
 
 | 旧設定（`utils/config.lua` 既定） | 新 kind / 設定プレフィックス | 意味の対応 |
 |----------------------------------|------------------------------|------------|
@@ -36,7 +36,7 @@
 | `GroupHealPoint` **Default = 80** | `GroupHeal` → `HealPctGroupHeal_*`（UI名 Group Regular Heal）※SHM は無し（下記） | 旧 Group 回転の人数ゲート |
 | `LightHealPoint` **Default = CLR 95 / 他 90** | （直接対応なし） | この4クラスのヒール回転では旧でも未使用。新スキャンは全 `HealPct*` の最大 |
 | `MaxHealPoint` **Default = 90** | **廃止** → `Class:GetHealScanThreshold()` = 設定済み `HealPct*` の最大（全0なら 100） | 誰をヒール対象にするかのゲート |
-| `CompleteHealPct` **Default = 80**（CLR のみ） | `CompleteHeal` → `HealPctCompleteHeal_WAR/PAL/SHD` のみ | タンク CH 専用 |
+| `CompleteHealPct` **Default = 80**（CLR のみ） | `CompleteHeal` → CLR は `HealPctCompleteHeal_Tank` のみ | タンク CH 専用 |
 | `PetHealPoint` **Default = 50** | **据え置き**（SHM `Companion's Blessing` 等） | Class Heal に含めない |
 | `GroupInjureCnt` **Default = 3** | **据え置き** | グループ人数条件 |
 | `HPCritical` **Default = Tank 20 / 他 30** | **据え置き**（PAL Lay on Hands / Hand of Piety の追加条件） | Fast 帯とは別ゲート |
@@ -55,14 +55,27 @@
 
 | クラス | `defaultHealPct` |
 |--------|------------------|
-| **CLR** | CompleteHeal=80, **FastHeal=50**（旧 BigHealPoint 既定）, Light/GroupHeal= tank85 / melee80 / 他75, SingleHoT/GroupHoT= tank95 / 他90 |
-| **PAL / DRU / SHM** | **すべて 0**（0＝その kind×クラスでは使わない） |
+| **CLR** | ロール別。CompleteHeal(Tank)=80, FastHeal Tank=45/他0, Light=65, GroupHeal=64, SingleHoT Tank=95/他0, GroupHoT=0 |
+| **PAL** | FastHeal Tank=45/他0, Light=65, GroupHeal=64, SingleHoT Tank=95/他0（CLR と同値） |
+| **DRU** | FastHeal Tank=45/他0, Light=65, GroupHeal=64（CLR と同値） |
+| **SHM** | FastHeal Tank=45/他0, Light=65, SingleHoT Tank=95/他0, GroupHoT=0（CLR と同値） |
 
 「コードの Default」と「旧ポイントの Default を写した値」は別物。PAL/DRU/SHM は未設定のままではヒールしない。
 
 ---
 
 ## 3. CLR
+
+### 3.0 ロール（2026-09-03〜）— CLR / PAL / DRU / SHM 共通
+
+| ロール | 対象クラス | 設定キー例 |
+|--------|------------|------------|
+| **Tank** | WAR / SHD / PAL | `HealPctLight_Tank` |
+| **Melee** | RNG / MNK / ROG / BER / BST / BRD | `HealPctLight_Melee` |
+| **Caster** | CLR / DRU / SHM / NEC / WIZ / MAG / ENC / OTH | `HealPctLight_Caster` |
+
+Complete Heal（CLR）は **`HealPctCompleteHeal_Tank` のみ**。  
+旧 `HealPct*_{CLASS}` は起動時に代表値へ移行（Tank←WAR…、Melee←MNK…、Caster←WIZ…）。
 
 ### 3.1 旧回転構造（本家 EQ Might CLR）
 

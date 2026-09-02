@@ -1768,7 +1768,10 @@ Config.DefaultConfig                                     = {
         Tooltip = "Allow pets of your groupmates to be targeted in PC healing rotations.\n" ..
             "Note that CLR/DRU/PAL/SHM will reserve \"Big Heal\" rotations for PCs.\n" ..
             "Further note that many abilities that heal the PC's own pet do not check this setting and are handled seperately.",
-        Default = true,
+        Default = function()
+            local c = Globals.CurLoadedClass
+            return not (c == "CLR" or c == "DRU" or c == "PAL" or c == "SHM")
+        end,
         ConfigType = "Advanced",
     },
     ['BreakInvisForHealing']       = {
@@ -1778,7 +1781,10 @@ Config.DefaultConfig                                     = {
         Category = "General Healing",
         Index = 3,
         Tooltip = "Break invis to heal, cure and rez when out of combat (Does not affect combat actions).",
-        Default = false,
+        Default = function()
+            local c = Globals.CurLoadedClass
+            return c == "CLR" or c == "DRU" or c == "PAL" or c == "SHM"
+        end,
         ConfigType = "Advanced",
     },
     -- Recovery/Thresholds
@@ -1868,7 +1874,10 @@ Config.DefaultConfig                                     = {
         Category = "Healing Thresholds",
         Index = 8,
         Tooltip = "Minimum PctHPs to process standard PC Healing Rotations on pets (if enabled). See 'Heal Pets as PCs' setting.",
-        Default = 50,
+        Default = function()
+            local c = Globals.CurLoadedClass
+            return (c == "CLR" or c == "DRU" or c == "PAL" or c == "SHM") and 1 or 50
+        end,
         Min = 1,
         Max = 100,
         ConfigType = "Advanced",
@@ -3494,12 +3503,19 @@ end
 ---@param peer string?
 ---@return boolean
 function Config:UsesClassHealPcts(peer)
-    -- Sentinel key from Class Heal: Regular (present whenever HealPct* defaults are built).
-    local sentinel = "HealPctLight_WAR"
+    -- Sentinel: Class Heal Regular exists (role keys e.g. Tank, or legacy class keys e.g. WAR).
+    local sentinels = { "HealPctLight_Tank", "HealPctLight_WAR", }
     if peer == nil or peer == Comms.GetPeerName() then
-        return Config:HaveSetting(sentinel)
+        for _, sentinel in ipairs(sentinels) do
+            if Config:HaveSetting(sentinel) then return true end
+        end
+        return false
     end
-    return (Config.TempSettings.PeerSettingToModuleCache or {})[sentinel] ~= nil
+    local cache = Config.TempSettings.PeerSettingToModuleCache or {}
+    for _, sentinel in ipairs(sentinels) do
+        if cache[sentinel] ~= nil then return true end
+    end
+    return false
 end
 
 --- Retrieves a specified setting.

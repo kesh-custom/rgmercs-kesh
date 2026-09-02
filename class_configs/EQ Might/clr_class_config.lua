@@ -6,25 +6,28 @@ local Core         = require("utils.core")
 local Globals      = require('utils.globals')
 local Targeting    = require("utils.targeting")
 
--- Class-based heal thresholds (EQ Might CLR).
--- Keys: HealPct{FastHeal|Light|SingleHoT|GroupHeal|GroupHoT|CompleteHeal}_{CLASS}
+-- Role-based heal thresholds (EQ Might CLR).
+-- Keys: HealPct{FastHeal|Light|SingleHoT|GroupHeal|GroupHoT|CompleteHeal}_{Tank|Melee|Caster}
 -- FastHeal = old Big Heal Point band (Divine Arb / Burst of Life / Remedy, etc.).
 -- Regular (Light) = Healing Light / Renewal.
 -- Group Injured Count prefers group spells when their own % count is met.
-local HEAL_CLASS_LIST = {
-    "WAR", "SHD", "PAL", "RNG", "MNK", "ROG", "BER", "BST",
-    "BRD", "CLR", "DRU", "SHM", "NEC", "WIZ", "MAG", "ENC", "OTH",
-}
-local HEAL_CLASS_SET = {}
-for _, sn in ipairs(HEAL_CLASS_LIST) do HEAL_CLASS_SET[sn] = true end
-
--- Complete Heal targets: tank classes only.
-local HEAL_CH_CLASS_LIST = { "WAR", "PAL", "SHD", }
-local HEAL_CH_CLASS_SET = { WAR = true, PAL = true, SHD = true, }
+-- Melee = non-tank melee (RNG/MNK/ROG/BER/BST/BRD). Caster = pure casters + OTH/pets.
+local HEAL_ROLE_LIST = { "Tank", "Melee", "Caster", }
 
 local HEAL_TANK_SET = { WAR = true, SHD = true, PAL = true, }
 local HEAL_MELEE_SET = {
     RNG = true, MNK = true, ROG = true, BER = true, BST = true, BRD = true,
+}
+
+-- Legacy per-class keys used only for one-shot migration into role keys.
+local HEAL_LEGACY_CLASS_LIST = {
+    "WAR", "SHD", "PAL", "RNG", "MNK", "ROG", "BER", "BST",
+    "BRD", "CLR", "DRU", "SHM", "NEC", "WIZ", "MAG", "ENC", "OTH",
+}
+local HEAL_LEGACY_ROLE_SOURCES = {
+    Tank = { "WAR", "SHD", "PAL", },
+    Melee = { "MNK", "RNG", "ROG", "BER", "BST", "BRD", },
+    Caster = { "WIZ", "CLR", "DRU", "SHM", "NEC", "MAG", "ENC", "OTH", },
 }
 
 local HEAL_KIND_LABEL = {
@@ -36,64 +39,79 @@ local HEAL_KIND_LABEL = {
     GroupHoT = "Group HoT",
 }
 
-local function defaultHealPct(kind, class)
-    local isTank = HEAL_TANK_SET[class]
-    local isMelee = HEAL_MELEE_SET[class]
+local HEAL_ROLE_TIP = {
+    Tank = "WAR / SHD / PAL",
+    Melee = "RNG / MNK / ROG / BER / BST / BRD (non-tank melee)",
+    Caster = "CLR / DRU / SHM / NEC / WIZ / MAG / ENC / other",
+}
+
+local function defaultHealPct(kind, role)
     if kind == "CompleteHeal" then
         return 80
     elseif kind == "FastHeal" then
-        return 50 -- matches old BigHealPoint default
-    elseif kind == "Light" or kind == "GroupHeal" then
-        if isTank then return 85 end
-        if isMelee then return 80 end
-        return 75
-    elseif kind == "SingleHoT" or kind == "GroupHoT" then
-        if isTank then return 95 end
-        return 90
+        if role == "Tank" then return 45 end
+        return 0
+    elseif kind == "Light" then
+        return 65
+    elseif kind == "GroupHeal" then
+        return 64
+    elseif kind == "SingleHoT" then
+        if role == "Tank" then return 95 end
+        return 0
+    elseif kind == "GroupHoT" then
+        return 0
     end
-    return 80
+    return 0
 end
 
-local function healPctSettingKey(kind, class)
-    return string.format("HealPct%s_%s", kind, class)
+local function healPctSettingKey(kind, role)
+    return string.format("HealPct%s_%s", kind, role)
+end
+
+local function classToHealRole(shortName)
+    local sn = (shortName or ""):upper()
+    if HEAL_TANK_SET[sn] then return "Tank" end
+    if HEAL_MELEE_SET[sn] then return "Melee" end
+    return "Caster"
 end
 
 local function buildClassHealDefaults()
     local kinds = {
-        { kind = "CompleteHeal", category = "Class Heal: Complete Heal", indexBase = 150, classes = HEAL_CH_CLASS_LIST, },
-        { kind = "Light", category = "Class Heal: Regular Heal", indexBase = 200, classes = HEAL_CLASS_LIST, },
+        { kind = "CompleteHeal", category = "Class Heal: Complete Heal", indexBase = 150, roles = { "Tank", }, },
+        { kind = "Light", category = "Class Heal: Regular Heal", indexBase = 200, roles = HEAL_ROLE_LIST, },
         {
             kind = "GroupHeal",
             category = "Class Heal: Group Regular Heal",
             indexBase = 250,
-            classes = HEAL_CLASS_LIST,
+            roles = HEAL_ROLE_LIST,
             extraTip = " When Group Injured Count is met, Group Regular Heal is preferred over single heals at the same %%.",
         },
-        { kind = "SingleHoT", category = "Class Heal: Single HoT", indexBase = 300, classes = HEAL_CLASS_LIST, },
+        { kind = "SingleHoT", category = "Class Heal: Single HoT", indexBase = 300, roles = HEAL_ROLE_LIST, },
         {
             kind = "GroupHoT",
             category = "Class Heal: Group HoT",
             indexBase = 320,
-            classes = HEAL_CLASS_LIST,
+            roles = HEAL_ROLE_LIST,
             extraTip = " When Group Injured Count is met, Group HoT is preferred over single HoTs at the same %%.",
         },
-        { kind = "FastHeal", category = "Class Heal: Fast Heal", indexBase = 350, classes = HEAL_CLASS_LIST, },
+        { kind = "FastHeal", category = "Class Heal: Fast Heal", indexBase = 350, roles = HEAL_ROLE_LIST, },
     }
     local out = {}
     for _, kinfo in ipairs(kinds) do
-        for i, class in ipairs(kinfo.classes) do
-            local key = healPctSettingKey(kinfo.kind, class)
+        for i, role in ipairs(kinfo.roles) do
+            local key = healPctSettingKey(kinfo.kind, role)
             local label = HEAL_KIND_LABEL[kinfo.kind] or kinfo.kind
+            local roleTip = HEAL_ROLE_TIP[role] or role
             local def = {
-                DisplayName = class,
+                DisplayName = role,
                 Group = "Abilities",
                 Header = "Recovery",
                 Category = kinfo.category,
                 Index = kinfo.indexBase + i,
                 Tooltip = string.format(
-                    "%s HP%% for %s: candidate when at or below this value. Lower %% = higher priority when multiple heals qualify.\n0 = never use this heal on %s.%s",
-                    label, class, class, kinfo.extraTip or ""),
-                Default = defaultHealPct(kinfo.kind, class),
+                    "%s HP%% for %s (%s): candidate when at or below this value. Lower %% = higher priority when multiple heals qualify.\n0 = never use this heal on %s.%s",
+                    label, role, roleTip, role, kinfo.extraTip or ""),
+                Default = defaultHealPct(kinfo.kind, role),
                 Min = 0,
                 Max = 99,
                 ConfigType = "Advanced",
@@ -105,9 +123,9 @@ local function buildClassHealDefaults()
 end
 
 local _ClassConfig = {
-    _version              = "2.5 - EQ Might",
+    _version              = "2.6 - EQ Might",
     _author               = "Algar, Derple, Robban",
-    -- Who-to-heal scan uses max Class Heal %%; per-kind thresholds gate actual casts.
+    -- Who-to-heal scan uses max Class Heal %%; per-kind thresholds gate actual casts (Tank/Melee/Caster).
     ['ModeChecks']        = {
         IsHealing = function() return true end,
         IsCuring = function() return Config:GetSetting('DoCures') end,
@@ -492,30 +510,32 @@ local _ClassConfig = {
             if not (target and target()) then return "OTH" end
             if Targeting.TargetIsType("pet", target) then return "OTH" end
             local sn = (target.Class.ShortName() or ""):upper()
-            if sn == "" or not HEAL_CLASS_SET[sn] then return "OTH" end
+            if sn == "" then return "OTH" end
             return sn
         end,
+        HealRole = function(self, target)
+            return classToHealRole(self.Helpers.ClassShort(self, target))
+        end,
         HealPct = function(self, kind, target)
-            local class = self.Helpers.ClassShort(self, target)
-            -- CompleteHeal settings exist only for WAR/PAL/SHD. SortHealRotationByThreshold still
-            -- asks for other classes (e.g. RNG) — avoid GetSetting cache miss spam.
-            if kind == "CompleteHeal" and not HEAL_CH_CLASS_SET[class] then
+            local role = self.Helpers.HealRole(self, target)
+            -- CompleteHeal settings exist only for Tank. SortHealRotationByThreshold still
+            -- asks for Melee/Caster — avoid GetSetting cache miss spam.
+            if kind == "CompleteHeal" and role ~= "Tank" then
                 return 0
             end
-            local key = healPctSettingKey(kind, class)
-            return tonumber(Config:GetSetting(key)) or defaultHealPct(kind, class)
+            local key = healPctSettingKey(kind, role)
+            return tonumber(Config:GetSetting(key)) or defaultHealPct(kind, role)
         end,
         ClassBelow = function(self, kind, target)
             if not (target and target()) then return false end
             local threshold = self.Helpers.HealPct(self, kind, target)
-            if not threshold or threshold <= 0 then return false end -- 0 = disabled for this class/kind
+            if not threshold or threshold <= 0 then return false end -- 0 = disabled for this role/kind
             return (target.PctHPs() or 999) <= threshold
         end,
         CompleteHealWanted = function(self, target)
             if not Config:GetSetting("DoCompleteHeal") then return false end
             if not (target and target()) then return false end
-            local class = self.Helpers.ClassShort(self, target)
-            if not HEAL_CH_CLASS_SET[class] then return false end
+            if self.Helpers.HealRole(self, target) ~= "Tank" then return false end
             return self.Helpers.ClassBelow(self, "CompleteHeal", target)
         end,
         GroupClassInjureCount = function(self, kind)
@@ -1561,7 +1581,7 @@ local _ClassConfig = {
             Index = 102,
             Tooltip = "Use your group-wide Elixir Line.",
             RequiresLoadoutChange = true,
-            Default = true,
+            Default = false,
             ConfigType = "Advanced",
         },
         ['GroupElixirUptime'] = {
@@ -1571,7 +1591,7 @@ local _ClassConfig = {
             Category = "General Healing",
             Index = 103,
             Tooltip = "In combat, attempt to keep full uptime on your Group Elixir. Note: There are scenarios where single elixirs could interfere with uptime.",
-            Default = true,
+            Default = false,
             ConfigType = "Advanced",
         },
         ['KeepPoisonMemmed']  = {
@@ -1698,6 +1718,50 @@ local _ClassConfig = {
 
 for key, def in pairs(buildClassHealDefaults()) do
     _ClassConfig.DefaultConfig[key] = def
+end
+
+--- One-shot: copy legacy HealPct*_{CLASS} into HealPct*_{Tank|Melee|Caster} before ResolveDefaults
+--- strips the old keys. Prefers the first listed source class that has a saved value.
+---@param settings table
+function _ClassConfig.MigrateSettings(settings)
+    if type(settings) ~= "table" then return end
+
+    local kinds = { "CompleteHeal", "FastHeal", "Light", "GroupHeal", "SingleHoT", "GroupHoT", }
+    local anyLegacy = false
+    for _, kind in ipairs(kinds) do
+        for _, class in ipairs(HEAL_LEGACY_CLASS_LIST) do
+            if settings[healPctSettingKey(kind, class)] ~= nil then
+                anyLegacy = true
+                break
+            end
+        end
+        if anyLegacy then break end
+    end
+    if not anyLegacy then return end
+
+    local function firstLegacy(kind, sources)
+        for _, class in ipairs(sources) do
+            local v = settings[healPctSettingKey(kind, class)]
+            if v ~= nil then return v end
+        end
+        return nil
+    end
+
+    for _, kind in ipairs(kinds) do
+        for role, sources in pairs(HEAL_LEGACY_ROLE_SOURCES) do
+            if kind == "CompleteHeal" and role ~= "Tank" then
+                -- no CompleteHeal role setting for Melee/Caster
+            else
+                local newKey = healPctSettingKey(kind, role)
+                if settings[newKey] == nil then
+                    local old = firstLegacy(kind, sources)
+                    if old ~= nil then
+                        settings[newKey] = old
+                    end
+                end
+            end
+        end
+    end
 end
 
 return _ClassConfig

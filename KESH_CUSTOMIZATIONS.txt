@@ -148,28 +148,33 @@ CLR / PAL / DRU / SHM 旧ポイント↔Class Heal の厳密対応:
   → docs/EQMIGHT_HEAL_THRESHOLD_MAP.md
 
 CLR:
-  - クラス別 HealPct*（Complete / Fast / Regular / Group / HoT）
-  - Fast = 旧 Big Heal Point 帯（Divine Arb / Burst of Life / Remedy 等）
-  - Regular = Healing Light / Renewal
+  - ロール別 HealPct*（Tank / Melee / Caster）。Melee = Tank以外の近接（RNG/MNK/ROG/BER/BST/BRD）
+  - Complete Heal は Tank のみ（既定 OFF / CH% Tank=80）
+  - Fast Heal: Tank=45 / Melee=0 / Caster=0
+  - Regular=65 / Group Regular=64（全ロール）
+  - Single HoT: Tank=95 / 他0。Group HoT 全0
+  - General: Break Invis ON、Single Elixir ON、Group Elixir/Uptime OFF、Heal Pets OFF
+  - Core 初回既定（CLR/DRU/PAL/SHM）: PetHealPoint=1、Heal Pets OFF、Break Invis ON
+  - 旧クラス別キーは起動時に代表クラス値へ一度だけ移行（WAR→Tank, MNK→Melee, WIZ→Caster 優先）
 
 SHM:
-  - クラス別 HealPct*（Fast / Regular / Single HoT / Group HoT）
+  - ロール別 HealPct*（Fast / Regular / Single HoT / Group HoT）— 既定は CLR と同値（存在する kind のみ）
   - ヒールローテ1本・sortByHealThreshold
-  - 初期値はすべて 0（0＝そのクラスには使わない）
+  - 旧クラス別キーは起動時にロールへ一度だけ移行
 
 PAL:
-  - クラス別 HealPct*（Fast / Regular / Group Regular / Single HoT）
+  - ロール別 HealPct*（Fast / Regular / Group Regular / Single HoT）— 既定は CLR と同値
   - Fast = Lay on Hands / BurstHeal 等の緊急。ToT は Regular
-  - 初期値はすべて 0
+  - 旧クラス別キーは起動時にロールへ一度だけ移行
   - Downtime: Breath of Tunare（DoBreathOfTunare）
   - HateTools(AggroTarget/AutoTarget)/AEHateTools: ローテ単位 IgnoreImmuneCheck（Hate目的なので Magic Immune でも打つ）
   - rotation.lua / class.lua: ローテ定義の IgnoreImmuneCheck を Run 経由で一括適用（エントリ単位フラグも従来どおり有効）
   - Stun ジェム解決: StunTimer4/5 は MyCastTime ≤ 1.5s のみ（BeforeResolveActions）
 
 DRU:
-  - クラス別 HealPct*（Fast / Regular / Group Regular）
+  - ロール別 HealPct*（Fast / Regular / Group Regular）— 既定は CLR と同値
   - ヒールローテ1本・sortByHealThreshold
-  - 初期値はすべて 0
+  - 旧クラス別キーは起動時にロールへ一度だけ移行
   - ProcBuff: Artifact of the Jaguar（CLR/DRU/ENC/MAG/NEC/SHM/WIZ のみ。Pet は対象外）
 
 MNK:

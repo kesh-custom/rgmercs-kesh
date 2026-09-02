@@ -28,6 +28,10 @@ function Base:LoadSettings(preLoadFn, postLoadFn)
     local defaultConfig = self.ClassConfig and self.ClassConfig.DefaultConfig or self.DefaultConfig
     local settings, firstSaveRequired = Config:GetAllModuleSettingsFromDb(self._name, defaultConfig)
 
+    if self.ClassConfig and type(self.ClassConfig.MigrateSettings) == "function" then
+        self.ClassConfig.MigrateSettings(settings)
+    end
+
     Config:RegisterModuleSettings(self._name, settings, defaultConfig, self.FAQ, firstSaveRequired)
 
     if postLoadFn then
