@@ -112,6 +112,7 @@ Stick:
   - TooFar / CantSee（Melee）も GetEngageDistance に統一（大型の距離7特例を削除）
   - TooFar フォールバック: すでに Stick 距離（2D）以内なのに Too Far なら Nav+Stick を 7 に詰める（段差用。flyer の moveback 10 は従来どおり優先）
   - TooFar / CantSee（戦闘）: 詠唱中（非 BRD）は Nav/Stick  reposition をスキップ（Chase ShouldFollow と同規則）
+  - Mercs Status Name/Class 右クリック Switch To: 押下ではなくリリース時に /foreground（他クライアントへのドラッグ持ち越し防止）
 
 Casting:
   - 戦闘中の cast 前: キャストタイム >= 101ms の Spell / AA / Clicky のみ max(300ms, 3×Ping) 待ち（RunCastLoop / CastCheck / ItemReady）

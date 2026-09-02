@@ -755,7 +755,8 @@ function Ui.RenderMercsStatus(showPopout)
                             else
                                 Ui.HandleStatusClickAction(peer, Config:GetSetting('StatusLeftClickAction'))
                             end
-                        elseif ImGui.IsItemClicked(ImGuiMouseButton.Right) then
+                        -- Release (not press): avoids carrying a held RMB into the newly-focused client (/foreground).
+                        elseif ImGui.IsItemHovered() and ImGui.IsMouseReleased(ImGuiMouseButton.Right) then
                             Ui.HandleStatusClickAction(peer, Config:GetSetting('StatusRightClickAction'))
                         end
                     end
@@ -1322,7 +1323,8 @@ function Ui.RenderMercsStatus(showPopout)
                             else
                                 Ui.HandleStatusClickAction(peer, Config:GetSetting('StatusLeftClickAction'))
                             end
-                        elseif ImGui.IsItemClicked(ImGuiMouseButton.Right) then
+                        -- Release (not press): avoids carrying a held RMB into the newly-focused client (/foreground).
+                        elseif ImGui.IsItemHovered() and ImGui.IsMouseReleased(ImGuiMouseButton.Right) then
                             Ui.HandleStatusClickAction(peer, Config:GetSetting('StatusRightClickAction'))
                         end
                         if ImGui.IsItemHovered() then
