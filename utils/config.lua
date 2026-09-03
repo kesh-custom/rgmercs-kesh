@@ -891,11 +891,27 @@ Config.DefaultConfig                                     = {
         Category = "Tank Target Selection",
         Index = 3,
         Tooltip =
-            "Tank Mode only (off-tank): automatically mark the Group Main Tank's AutoTarget as NoHate so HateTools skip that mob.\n" ..
-            "Requires Group Main Tank to be set to someone other than yourself. Cleared when that peer dies, zones, heartbeat times out, or changes AutoTarget.\n" ..
-            "Manual NoHate entries are left alone. Does not peel on live aggro loss — only when the main tank peer is gone.",
+            "Tank Mode only (off-tank): automatically mark main tank peer AutoTarget(s) as NoHate so HateTools skip those mobs.\n" ..
+            "Uses Off-Tank NoHate Peer if set (comma-separated names); otherwise Group Main Tank (must be someone other than yourself).\n" ..
+            "Cleared when peers die, zone, heartbeat times out, or change AutoTarget.\n" ..
+            "Manual NoHate entries are left alone. Does not peel on live aggro loss — only when peer AutoTargets drop.",
         Default = false,
         ConfigType = "Advanced",
+    },
+    ['OffTankAutoNoHatePeer']      = {
+        DisplayName = "Off-Tank NoHate Peer",
+        Group = "Combat",
+        Header = "Targeting",
+        Category = "Tank Target Selection",
+        Index = 4,
+        Tooltip =
+            "Character name(s) whose AutoTarget is synced into NoHate when Off-Tank Auto NoHate is on.\n" ..
+            "Multiple names: comma or semicolon separated (e.g. Layscars,Elleair). Yourself is ignored.\n" ..
+            "Leave blank to use Group Main Tank. Useful in raids where group Main Tank cannot be set.",
+        Default = "",
+        Hint = "Name or Name1,Name2",
+        ConfigType = "Advanced",
+        ShowCond = function(peer) return Config:PeerGetSetting(peer, 'OffTankAutoNoHate') == true end,
     },
 
     -- Assisting

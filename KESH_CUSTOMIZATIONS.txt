@@ -50,46 +50,51 @@ Heal:
   - Class HealPct* があるとき Light/Main/Group Heal Point は ShowCond で非表示
 
 Off-Tank Auto NoHate（Combat → Targeting → Tank Target Selection）:
-  - 設定名: OffTankAutoNoHate（既定 OFF）
-  - 目的: 副タンクが Group Main Tank の AutoTarget（例: Named）を NoHate に同期し、
+  - 設定名: OffTankAutoNoHate（既定 OFF）+ OffTankAutoNoHatePeer（文字列、既定空）
+  - 目的: 副タンクが本タンク peer の AutoTarget（例: Named）を NoHate に同期し、
         副タンクの HateTools がその mob を叩かないようにする
   - 前提:
         ・自分は Tank モード（Core.IsTanking）
-        ・EQ グループの Main Tank が「自分以外」に設定されていること
-        ・Main Tank 側も rgmercs-kesh 稼働（heartbeat の AutoTargetID を参照）
-  - 参照先: Group.MainTank のみ。Main Assist へのフォールバックはしない
+        ・同期元 peer が「自分以外」であること
+        ・本タンク側も rgmercs-kesh 稼働（heartbeat の AutoTargetID を参照）
+  - 参照先（優先順）:
+        1. OffTankAutoNoHatePeer（キャラ名。カンマ／セミコロン区切りで複数可。例: Layscars,Elleair）
+        2. Group.MainTank（peer 名が空のときのフォールバック）
+        ・Main Assist / Raid Assist へのフォールバックはしない
+  - 複数 peer: 生存中の各 peer の AutoTarget をすべて NoHate に載せる。
+        落ちた／古い heartbeat の peer 分だけ外し、他 peer の同期は残す
   - 同期: Globals.AutoSyncedNoHateIDs で自動分を追跡。手動 NoHate は触らない
   - 更新レイテンシ:
         ・平常 heartbeat は directed heartbeat（約 500ms）
         ・AutoTarget 変更時は Main から SendHeartbeat(force) で即送信
           （Comms.ForceHeartbeatIfAutoTargetChanged）
   - 自動解除（このときだけ auto NH を外し、副タンクが HateTools 可能になる）:
-        ・MT peer 死亡／Corpse
-        ・ゾーン／インスタンス違い
-        ・heartbeat が約 2 秒超で古い
-        ・MT の AutoTarget が変わった／無くなった
+        ・対象 peer 死亡／Corpse／ゾーン／インスタンス違い／heartbeat 約 2 秒超
+        ・その peer の AutoTarget が変わった／無くなった
         ・設定 OFF、または自分が Tank モードでない
+        ・登録 peer が誰も有効な AutoTarget を持たない
   - やらないこと:
         ・戦闘中の aggro 喪失だけでは NoHate を外さない（peel は MT 側の仕事）
         ・手動 NoHate の一括クリアはしない（Clear NoHate / /rgl クリア時は auto 分も一緒に消える）
 
   想定運用（2タンク: MT＝Named、副＝雑魚クリア）:
-    Main Tank（Group Main Tank）:
+    Main Tank:
       - Mode = Tank
-      - Assist: 自分を MA にする（Assist List 先頭＝自分、または Group MA＝自分）
+      - Assist: 自分を MA にする（Assist List 先頭＝自分、または Group/Raid MA＝自分）
       - Scan Priority = Named（Named を優先して掴む）
       - Off-Tank Auto NoHate = OFF（不要）
-    Off-Tank（グループの Main Assist 想定）:
+    Off-Tank:
       - Mode = Tank
       - Scan Priority = Non-Named（雑魚を優先して刈る）
       - Off-Tank Auto NoHate = ON
-      - グループロール: Main Tank＝上記 MT、Main Assist＝この副タンク
+      - Off-Tank NoHate Peer = 本タンク名（複数なら Layscars,Elleair）
+      - グループで MT が付けられる場合は Peer 空でも Group Main Tank で可
     DPS / 他メンバー:
-      - Main Assist（副タンク）をアシスト → 雑魚クリアに追従
+      - 副タンク（または Raid MA）をアシスト → 雑魚クリアに追従
     動きのイメージ:
       MT が Named を AutoTarget → 副タンク側でその ID が NoHate 同期
       → 副は Named に HateTools せず Non-Named を処理
-      → MT が死ぬ／ゾーン／heartbeat 切れ → auto NoHate 解除 → 副が Named を取れる
+      → MT が死ぬ／ゾーン／heartbeat 切れ → その peer 分の auto NoHate 解除 → 副が Named を取れる
 
 Rotation / Charm / Mez:
   - BeforeResolveActions: スペル解決直前に ClassConfig フック

@@ -1094,19 +1094,61 @@ function Targeting.ClearAutoSyncedNoHate()
     Globals.AutoSyncedNoHateIDs = Set.new({})
 end
 
---- Off-tank helper: Group Main Tank name if set and not self.
----@return string|nil
-local function resolveMainTankPeerName()
+--- Parse OffTankAutoNoHatePeer (comma-separated) or fall back to Group Main Tank.
+--- Excludes self. Returns a list of character names (may be empty).
+---@return string[]
+local function resolveMainTankPeerNames()
+    local meName = (mq.TLO.Me.CleanName() or Globals.CurLoadedChar or ""):lower()
+    local names = {}
+    local seen = {}
+
+    local function addName(name)
+        name = (name or ""):match("^%s*(.-)%s*$") or ""
+        if name == "" then return end
+        local lower = name:lower()
+        if lower == meName or seen[lower] then return end
+        seen[lower] = true
+        names[#names + 1] = name
+    end
+
+    local configured = (Config:GetSetting('OffTankAutoNoHatePeer') or ""):match("^%s*(.-)%s*$") or ""
+    if configured ~= "" then
+        for part in configured:gmatch("[^,;]+") do
+            addName(part)
+        end
+        return names
+    end
+
     local mtId = mq.TLO.Group.MainTank.ID() or 0
     local mtName = mq.TLO.Group.MainTank.CleanName() or ""
-    if mtId > 0 and mtId ~= mq.TLO.Me.ID() and mtName ~= "" then
-        return mtName
+    if mtId > 0 and mtId ~= mq.TLO.Me.ID() then
+        addName(mtName)
     end
-    return nil
+    return names
 end
 
---- Off-Tank Auto NoHate: sync Group Main Tank peer AutoTarget into NoHateTargetIDs.
---- Clears auto-synced IDs if that peer dies, zones, or heartbeat goes stale. Does not peel on live aggro loss.
+--- True if peer heartbeat is fresh, in-zone, and spawn is not a corpse.
+---@param peerName string
+---@param data table?
+---@param lastHb number?
+---@return boolean
+local function isMainTankPeerAvailable(peerName, data, lastHb)
+    local fresh = data and (Globals.GetTimeSeconds() - (lastHb or 0)) <= 2
+    if not fresh or not data then return false end
+    if (tonumber(data.HPs) or 0) <= 0 then return false end
+    if data.ZoneId and data.ZoneId ~= mq.TLO.Zone.ID() then return false end
+    if data.InstanceId and data.InstanceId ~= mq.TLO.Me.Instance() then return false end
+
+    local spawn = mq.TLO.Spawn(string.format("PC =%s", peerName))
+    if spawn and spawn() and (spawn.Dead() or (spawn.Type() or "") == "Corpse") then
+        return false
+    end
+    return true
+end
+
+--- Off-Tank Auto NoHate: sync main-tank peer AutoTarget(s) into NoHateTargetIDs
+--- (OffTankAutoNoHatePeer comma list, else Group Main Tank).
+--- Clears auto-synced IDs not present on any available peer. Does not peel on live aggro loss.
 function Targeting.SyncAutoNoHateFromMainTank()
     if not Config:GetSetting('OffTankAutoNoHate') then
         Targeting.ClearAutoSyncedNoHate()
@@ -1117,68 +1159,57 @@ function Targeting.SyncAutoNoHateFromMainTank()
         return
     end
 
-    local peerName = resolveMainTankPeerName()
-    if not peerName then
+    local peerNames = resolveMainTankPeerNames()
+    if #peerNames == 0 then
         Targeting.ClearAutoSyncedNoHate()
         return
     end
 
-    local heartbeat = Comms.GetPeerHeartbeatByName(peerName)
-    local data = heartbeat and heartbeat.Data or nil
-    local lastHb = heartbeat and heartbeat.LastHeartbeat or 0
-    local fresh = data and (Globals.GetTimeSeconds() - lastHb) <= 2
-
-    -- Peer dead / zoned / timed out → drop auto NH so this tank can HateTools the mob.
-    local peerDead = false
-    if not fresh or not data then
-        peerDead = true
-    else
-        local hp = tonumber(data.HPs) or 0
-        if hp <= 0 then peerDead = true end
-        if data.ZoneId and data.ZoneId ~= mq.TLO.Zone.ID() then peerDead = true end
-        if data.InstanceId and data.InstanceId ~= mq.TLO.Me.Instance() then peerDead = true end
-    end
-
-    -- Also check in-zone spawn if present.
-    if not peerDead then
-        local spawn = mq.TLO.Spawn(string.format("PC =%s", peerName))
-        if spawn and spawn() and (spawn.Dead() or (spawn.Type() or "") == "Corpse") then
-            peerDead = true
+    local desiredIds = Set.new({})
+    for _, peerName in ipairs(peerNames) do
+        local heartbeat = Comms.GetPeerHeartbeatByName(peerName)
+        local data = heartbeat and heartbeat.Data or nil
+        local lastHb = heartbeat and heartbeat.LastHeartbeat or 0
+        if isMainTankPeerAvailable(peerName, data, lastHb) then
+            local desiredId = tonumber(data.AutoTargetID) or 0
+            if desiredId > 0 then
+                desiredIds:add(desiredId)
+            end
+        else
+            Logger.log_verbose("SyncAutoNoHateFromMainTank: peer %s unavailable — skipping.", peerName)
         end
     end
 
-    if peerDead then
+    local desiredList = desiredIds:toList() or {}
+    if #desiredList == 0 then
         if Globals.AutoSyncedNoHateIDs and #Globals.AutoSyncedNoHateIDs:toList() > 0 then
-            Logger.log_debug("SyncAutoNoHateFromMainTank: peer %s unavailable — clearing auto NoHate.", peerName)
+            Logger.log_debug("SyncAutoNoHateFromMainTank: no live peer AutoTargets — clearing auto NoHate.")
         end
         Targeting.ClearAutoSyncedNoHate()
         return
-    end
-
-    local desiredId = tonumber(data.AutoTargetID) or 0
-    if desiredId <= 0 then
-        Targeting.ClearAutoSyncedNoHate()
-        return
-    end
-
-    -- Drop previously synced IDs that are no longer the peer's AutoTarget.
-    for _, id in ipairs((Globals.AutoSyncedNoHateIDs and Globals.AutoSyncedNoHateIDs:toList()) or {}) do
-        if id ~= desiredId then
-            Globals.NoHateTargetIDs:remove(id)
-            Globals.AutoSyncedNoHateIDs:remove(id)
-        end
     end
 
     if not Globals.AutoSyncedNoHateIDs then
         Globals.AutoSyncedNoHateIDs = Set.new({})
     end
-    if not Globals.AutoSyncedNoHateIDs:contains(desiredId) then
-        Globals.NoHateTargetIDs:add(desiredId)
-        Globals.AutoSyncedNoHateIDs:add(desiredId)
-        Logger.log_debug("SyncAutoNoHateFromMainTank: synced NoHate %d from %s.", desiredId, peerName)
-    elseif not Globals.NoHateTargetIDs:contains(desiredId) then
-        -- Manual clear of NH while still synced — re-apply.
-        Globals.NoHateTargetIDs:add(desiredId)
+
+    -- Drop previously synced IDs that no available peer still has as AutoTarget.
+    for _, id in ipairs(Globals.AutoSyncedNoHateIDs:toList() or {}) do
+        if not desiredIds:contains(id) then
+            Globals.NoHateTargetIDs:remove(id)
+            Globals.AutoSyncedNoHateIDs:remove(id)
+        end
+    end
+
+    for _, desiredId in ipairs(desiredList) do
+        if not Globals.AutoSyncedNoHateIDs:contains(desiredId) then
+            Globals.NoHateTargetIDs:add(desiredId)
+            Globals.AutoSyncedNoHateIDs:add(desiredId)
+            Logger.log_debug("SyncAutoNoHateFromMainTank: synced NoHate %d.", desiredId)
+        elseif not Globals.NoHateTargetIDs:contains(desiredId) then
+            -- Manual clear of NH while still synced — re-apply.
+            Globals.NoHateTargetIDs:add(desiredId)
+        end
     end
 end
 
