@@ -399,7 +399,7 @@ function Rotation.Run(caller, rotationTable, targetTable, resolvedActionMap, ste
 
                                 if res == true then -- Algarnote... revisit: Either make sure customfuncs all return bools, or consider relaxing this so a customfunc will count as success if ~= false
                                     entryHadSuccess = true
-                                    if isGroup or entry.one_target then break end
+                                    if isGroup then break end
                                 end
                             end
 
