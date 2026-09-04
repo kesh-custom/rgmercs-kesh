@@ -164,6 +164,9 @@ function Rotation.ExecEntry(caller, entry, targetId, resolvedActionMap, bAllowMe
         if Casting.SpellReady(spell, bAllowMem) then
             Rotation.RunPreActivate(caller, resolvedActionMap, entry)
             ret, isGroup = Casting.UseSpell(spell.RankName(), targetId, bAllowMem, entry.allowDead, entry.retries)
+            if ret then
+                Casting.BlockSpellsRestOfPass()
+            end
         end
         Logger.log_verbose("(Spell) Trying to use %s - %s :: %s", entry.name, spell.RankName(), ret and "\agSuccess" or "\arFailed!")
     end
@@ -356,64 +359,72 @@ function Rotation.Run(caller, rotationTable, targetTable, resolvedActionMap, ste
                 Logger.log_verbose("\aoDoing RunRotation(start(%d), step(%d), cur(%d))", start_step, steps, idx)
                 lastStepIdx = idx
 
-                local entryPass = false
-                local entryActive = false
-                local entryHadSuccess = false
-                entry.lastCondTimeSpent = 0
-                entry.lastExecTimeSpent = 0
+                local evalMode = Casting.GetActionEvalMode()
+                if not Casting.EntryAllowedForEvalMode(entry, resolvedActionMap, evalMode) then
+                    Logger.log_verbose("\aoSkipping entry(%s) type(%s) for evalMode(%s)", entry.name, entry.type, evalMode)
+                    entry.lastCondTimeSpent = 0
+                    entry.lastExecTimeSpent = 0
+                    entry.lastRun = { pass = false, active = false, }
+                else
+                    local entryPass = false
+                    local entryActive = false
+                    local entryHadSuccess = false
+                    entry.lastCondTimeSpent = 0
+                    entry.lastExecTimeSpent = 0
 
-                for _, targetId in ipairs(targetTable) do
-                    if targetId and targetId > 0 then
-                        local condStart = string.format("%.03f", Globals.GetTimeMS())
-                        local pass, active = Rotation.TestConditionForEntry(caller, resolvedActionMap, entry, targetId, ignoreImmuneCheck)
-                        local condStop = string.format("%.03f", Globals.GetTimeMS())
-                        entry.lastCondTimeSpent = entry.lastCondTimeSpent + (condStop - condStart)
+                    for _, targetId in ipairs(targetTable) do
+                        if targetId and targetId > 0 then
+                            local condStart = string.format("%.03f", Globals.GetTimeMS())
+                            local pass, active = Rotation.TestConditionForEntry(caller, resolvedActionMap, entry, targetId, ignoreImmuneCheck)
+                            local condStop = string.format("%.03f", Globals.GetTimeMS())
+                            entry.lastCondTimeSpent = entry.lastCondTimeSpent + (condStop - condStart)
 
-                        if pass then entryPass = true end
-                        if active then entryActive = true end
+                            if pass then entryPass = true end
+                            if active then entryActive = true end
 
-                        Logger.log_verbose("\aoDoing RunRotation(start(%d), step(%d), cur(%d)) :: TestConditionsForEntry(target(%d)) => %s",
-                            start_step, steps, idx, targetId, Strings.BoolToColorString(pass and true or false))
+                            Logger.log_verbose("\aoDoing RunRotation(start(%d), step(%d), cur(%d)) :: TestConditionsForEntry(target(%d)) => %s",
+                                start_step, steps, idx, targetId, Strings.BoolToColorString(pass and true or false))
 
-                        if pass then
-                            local rStart = string.format("%.03f", Globals.GetTimeMS())
-                            local res, isGroup = Rotation.ExecEntry(caller, entry, targetId, resolvedActionMap, bAllowMem)
-                            local rStop = string.format("%.03f", Globals.GetTimeMS())
-                            entry.lastExecTimeSpent = entry.lastExecTimeSpent + (rStop - rStart)
-                            if entry.from_clicky then
-                                Modules:ExecModule("Clickies", "SetUsed", entry.name)
+                            if pass then
+                                local rStart = string.format("%.03f", Globals.GetTimeMS())
+                                local res, isGroup = Rotation.ExecEntry(caller, entry, targetId, resolvedActionMap, bAllowMem)
+                                local rStop = string.format("%.03f", Globals.GetTimeMS())
+                                entry.lastExecTimeSpent = entry.lastExecTimeSpent + (rStop - rStart)
+                                if entry.from_clicky then
+                                    Modules:ExecModule("Clickies", "SetUsed", entry.name)
+                                end
+
+                                Logger.log_verbose("\aoDoing RunRotation(start(%d), step(%d), cur(%d)) :: ExecEntry(target(%d)) => %s",
+                                    start_step, steps, idx, targetId, Strings.BoolToColorString(res))
+
+                                if res == true then -- Algarnote... revisit: Either make sure customfuncs all return bools, or consider relaxing this so a customfunc will count as success if ~= false
+                                    entryHadSuccess = true
+                                    if isGroup or entry.one_target then break end
+                                end
                             end
 
-                            Logger.log_verbose("\aoDoing RunRotation(start(%d), step(%d), cur(%d)) :: ExecEntry(target(%d)) => %s",
-                                start_step, steps, idx, targetId, Strings.BoolToColorString(res))
-
-                            if res == true then -- Algarnote... revisit: Either make sure customfuncs all return bools, or consider relaxing this so a customfunc will count as success if ~= false
-                                entryHadSuccess = true
-                                if isGroup then break end
+                            if Globals.PauseMain then
+                                break
                             end
+                        end
+                    end
+
+                    entry.lastRun = { pass = entryPass, active = entryActive, }
+
+                    if entryHadSuccess then
+                        anySuccess = true
+                        stepsThisTime = stepsThisTime + 1
+
+                        if steps > 0 and stepsThisTime >= steps then
+                            break
                         end
 
                         if Globals.PauseMain then
                             break
                         end
+                    else
+                        Logger.log_verbose("\aoFailed Condition RunRotation(start(%d), step(%d), cur(%d))", start_step, steps, idx)
                     end
-                end
-
-                entry.lastRun = { pass = entryPass, active = entryActive, }
-
-                if entryHadSuccess then
-                    anySuccess = true
-                    stepsThisTime = stepsThisTime + 1
-
-                    if steps > 0 and stepsThisTime >= steps then
-                        break
-                    end
-
-                    if Globals.PauseMain then
-                        break
-                    end
-                else
-                    Logger.log_verbose("\aoFailed Condition RunRotation(start(%d), step(%d), cur(%d))", start_step, steps, idx)
                 end
 
                 local tStop = string.format("%.03f", Globals.GetTimeMS())

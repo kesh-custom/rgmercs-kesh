@@ -2991,6 +2991,7 @@ end
 
 function Module:GiveTime()
     local combat_state = Combat.GetCachedCombatState()
+    Casting.ResetSpellEvalPass()
 
     if not self.ClassConfig or not self.ModuleLoaded then return end
     self:MaintainSwapGem()
@@ -3106,6 +3107,11 @@ function Module:GiveTime()
 
     if self:IsDispelling() or self:HasDispelClickies() then
         self:RunDispel(combat_state)
+    end
+
+    local evalMode = Casting.GetActionEvalMode()
+    if evalMode ~= "full" then
+        Logger.log_verbose("Class GiveTime RotationStates: mode=%s", evalMode)
     end
 
     -- Downtime rotation will just run a full rotation to completion

@@ -962,6 +962,7 @@ local _ClassConfig = {
             {
                 name = "Legendary Armband of the Panther",
                 type = "Item",
+                one_target = true,
                 load_cond = function(self) return self.Helpers.ProcBuffChoice() == "PantherItem" end,
                 cond = function(self, itemName, target)
                     if (mq.TLO.Me.CombatState():lower() or "") ~= "combat" then return false end
@@ -971,6 +972,7 @@ local _ClassConfig = {
             {
                 name = "Artifact of the Leopard",
                 type = "Item",
+                one_target = true,
                 load_cond = function(self) return self.Helpers.ProcBuffChoice() == "LeopardItem" end,
                 cond = function(self, itemName, target)
                     return Casting.GroupBuffItemCheck(itemName, target)
@@ -979,6 +981,7 @@ local _ClassConfig = {
             {
                 name = "Artifact of the Jaguar",
                 type = "Item",
+                one_target = true,
                 load_cond = function(self) return self.Helpers.ProcBuffChoice() == "JaguarItem" end,
                 cond = function(self, itemName, target)
                     if not Targeting.TargetIsAMelee(target) then return false end
@@ -988,6 +991,7 @@ local _ClassConfig = {
             {
                 name = "MeleeProcBuff",
                 type = "Spell",
+                one_target = true,
                 load_cond = function(self) return self.Helpers.ProcBuffChoice() == "ProcSpell" end,
                 cond = function(self, spell, target)
                     if not Casting.CastReady(spell) then return false end --avoid constant group buff checks
@@ -1000,6 +1004,7 @@ local _ClassConfig = {
             {
                 name = "Ultrafabled Rune Etched Chestplate",
                 type = "Item",
+                one_target = true,
                 load_cond = function(self) return self.Helpers.SlowProcChoice() == "Chestplate" end,
                 cond = function(self, spell, target)
                     return Targeting.TargetIsTanking(target) and Casting.GroupBuffItemCheck(spell, target)
@@ -1008,6 +1013,7 @@ local _ClassConfig = {
             {
                 name = "SlowProcBuff",
                 type = "Spell",
+                one_target = true,
                 load_cond = function(self) return self.Helpers.SlowProcChoice() == "Spell" end,
                 cond = function(self, spell, target)
                     return Targeting.TargetIsTanking(target) and Casting.GroupBuffCheck(spell, target)

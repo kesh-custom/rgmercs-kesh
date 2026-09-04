@@ -121,6 +121,12 @@ Stick:
 
 Casting:
   - 戦闘中の cast 前: キャストタイム >= 101ms の Spell / AA / Clicky のみ max(300ms, 3×Ping) 待ち（RunCastLoop / CastCheck / ItemReady）
+  - GCD / Settle 時のスペル評価停止（Rotation.Run の cond 前スキップ）:
+        ・mode は都度 GetActionEvalMode()（スナップショットなし。settle > gcd > full）
+        ・GCD（SpellInCooldown）: spell エントリは評価しない。AA / Clicky はキャストタイム不問で残す
+        ・Settle 未完了: spell 不可。AA / Clicky は cast time < 101ms のみ
+        ・一度 GCD/Settle を見た、またはスペルを撃った GiveTime は、残りスペルを見ない（明けても同ループの DPS から再開しない）
+        ・次の GiveTime で先頭から。Song / Disc / Ability は常に許可。Wait はしない
 
 Tank Positioning:
   - Tank Reposition Mode: Nav Mesh / Stick Snaproll（Keep Mobs in Front の方式）

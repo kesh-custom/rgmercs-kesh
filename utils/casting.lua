@@ -1921,6 +1921,112 @@ function Casting.HasCombatCastSettleCastTime(castTimeMs)
     return (castTimeMs or 0) >= Casting.CombatCastSettleMinCastMs
 end
 
+--- True when combat timed-cast settle is not yet satisfied (independent of a specific cast time).
+--- Same movement/nav/position gates as CombatCastSettleMovingCheck for timed casts.
+---@return boolean
+function Casting.IsCombatSettleBlocked()
+    if Core.MyClassIs("brd") then return false end
+    if not (Globals.CurrentState == "Combat" or Targeting.HasXTHaters()) then return false end
+    return mq.TLO.Me.Moving()
+        or mq.TLO.Navigation.Active()
+        or mq.TLO.MoveTo.Moving()
+        or Movement:GetTimeSinceLastPositionChange() < Casting.GetCombatCastSettleSec()
+end
+
+--- Live eval mode (settle > gcd > full). No snapshot — GCD/Settle is read at the call site.
+---@return "full"|"gcd"|"settle"
+function Casting.ComputeActionEvalMode()
+    if Casting.IsCombatSettleBlocked() then return "settle" end
+    if mq.TLO.Me.SpellInCooldown() then return "gcd" end
+    return "full"
+end
+
+--- Per GiveTime: once spells are blocked (GCD/Settle seen, or a spell just fired), later
+--- spell entries this pass stay skipped so a mid-pass GCD expiry cannot resume DPS mid-list.
+Casting._blockSpellsRestOfPass = false
+
+function Casting.ResetSpellEvalPass()
+    Casting._blockSpellsRestOfPass = false
+end
+
+function Casting.BlockSpellsRestOfPass()
+    Casting._blockSpellsRestOfPass = true
+end
+
+--- Rotation entry eval mode: settle (strictest) > gcd > full. Always live.
+---@return "full"|"gcd"|"settle"
+function Casting.GetActionEvalMode()
+    return Casting.ComputeActionEvalMode()
+end
+
+--- Cast time (ms) for an AA name, or 0 if unknown/passive.
+---@param aaName string?
+---@return number
+function Casting.GetAACastTimeMs(aaName)
+    if not aaName or aaName == "" then return 0 end
+    local aa = mq.TLO.Me.AltAbility(aaName)
+    if not aa or not aa() then return 0 end
+    local aaSpell = aa.Spell
+    if not aaSpell or not aaSpell() then return 0 end
+    return aaSpell.MyCastTime() or 0
+end
+
+--- Cast time (ms) for an item clicky, or 0 if none.
+---@param itemName string?
+---@return number
+function Casting.GetItemCastTimeMs(itemName)
+    if not itemName or itemName == "" then return 0 end
+    local clicky = mq.TLO.FindItem("=" .. itemName).Clicky
+    if not clicky or not clicky() then return 0 end
+    return clicky.CastTime() or 0
+end
+
+--- Whether a rotation entry may be condition-tested/executed in the given eval mode.
+--- GCD: skip spells only (AA/clickies unrestricted). Settle: skip spells and AA/clickies with cast >= 101ms.
+--- Songs are always allowed (bard path untouched).
+---@param entry table
+---@param resolvedActionMap table?
+---@param mode "full"|"gcd"|"settle"|nil
+---@return boolean
+function Casting.EntryAllowedForEvalMode(entry, resolvedActionMap, mode)
+    mode = mode or Casting.GetActionEvalMode()
+    if not entry or not entry.type then return true end
+
+    local entryType = entry.type:lower()
+    if entryType == "song" or entryType == "disc" or entryType == "ability" then return true end
+    if entryType == "spell" then
+        if mode ~= "full" or Casting._blockSpellsRestOfPass then
+            if mode ~= "full" then
+                Casting.BlockSpellsRestOfPass()
+            end
+            return false
+        end
+        return true
+    end
+
+    if mode == "full" then return true end
+
+    if entryType == "aa" then
+        if mode == "gcd" then return true end
+        local aaName = (resolvedActionMap and resolvedActionMap[entry.name]) or entry.name
+        return not Casting.HasCombatCastSettleCastTime(Casting.GetAACastTimeMs(aaName))
+    end
+
+    if entryType == "item" then
+        if mode == "gcd" then return true end
+        local itemName = (resolvedActionMap and resolvedActionMap[entry.name]) or entry.name
+        return not Casting.HasCombatCastSettleCastTime(Casting.GetItemCastTimeMs(itemName))
+    end
+
+    if entryType == "clickyitem" then
+        if mode == "gcd" then return true end
+        local itemName = Config:GetSetting(entry.name)
+        return not Casting.HasCombatCastSettleCastTime(Casting.GetItemCastTimeMs(itemName))
+    end
+
+    return true
+end
+
 --- True when a timed cast in combat should wait for movement/nav to finish and settle.
 ---@param castTimeMs number?
 ---@return boolean
